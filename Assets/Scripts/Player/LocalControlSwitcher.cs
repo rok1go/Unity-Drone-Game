@@ -11,6 +11,11 @@ public class LocalControlSwitcher : MonoBehaviour
 
     private void Start()
     {
+        ExplosionCameraShake.Attach(human != null ? human.viewCamera : null);
+        ExplosionCameraShake.Attach(drone != null ? drone.viewCamera : null);
+        var hud = GetComponent<DroneHud>();
+        if (hud == null) hud = gameObject.AddComponent<DroneHud>();
+        hud.Initialize(this);
         if (drone != null) drone.Exploded += HandleDroneExploded;
         SetDroneControl(startAsDrone);
         SetCursor(true);

@@ -17,7 +17,7 @@ public static class DestructionSystem
     private static readonly HashSet<DestructionDebris> debris = new HashSet<DestructionDebris>();
     public static int ActiveDebrisCount
     {
-        get { int count = 0; foreach (var item in debris) if (item != null && item.Body != null && !item.Body.isKinematic) count++; return count; }
+        get { int count = 0; foreach (var item in debris) if (item != null && item.Body != null && !item.Body.isKinematic && !item.Body.IsSleeping()) count++; return count; }
     }
     public static int TotalDebrisCount => debris.Count;
     public static event Action<string, Vector3> BlockDetached;
@@ -28,32 +28,28 @@ public static class DestructionSystem
     private static void ResetState() { debris.Clear(); LastDetachedIds = Array.Empty<string>(); BlockDetached = null; }
     internal static bool HasCapacity(int limit)
     {
-        foreach (var item in debris) if (item != null) item.FreezeIfResting();
+        // Persistent sleeping rubble must not permanently consume the active budget.
         return ActiveDebrisCount < Mathf.Clamp(limit, 1, 256);
     }
 
-    // At a saturated budget additional support failures join an existing compound chunk
-    // in this map, instead of remaining suspended or allocating more simulated bodies.
+    // Each newly disconnected structure gets its own body. Never weld unrelated rubble
+    // to an older body: it makes distant pieces stick together and teleports inertia.
+    // The blast-fragment budget is enforced before detachment; connected collapses
+    // remain physical even when that budget has been reached.
     internal static DestructionDebris DetachGroup(List<DestructibleBlock> blocks, ExplosionDamage damage, string label)
     {
         if (blocks.Count == 0) return null;
         Transform owner = blocks[0].DebrisParent;
-        DestructionDebris chunk = null;
-        if (!HasCapacity(damage.maxActiveDebris))
-            foreach (var item in debris)
-                if (item != null && !item.Body.isKinematic && item.transform.parent == owner) { chunk = item; break; }
-        bool created = chunk == null;
-        if (created)
-        {
-            var obj = new GameObject(label); obj.transform.SetParent(owner, true);
-            Vector3 center = Vector3.zero; foreach (var block in blocks) center += block.transform.position;
-            obj.transform.position = center / blocks.Count;
-            var body = obj.AddComponent<Rigidbody>();
-            body.useGravity = true; body.linearDamping = 0.15f; body.angularDamping = 0.1f;
-            body.interpolation = RigidbodyInterpolation.Interpolate;
-            body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
-            chunk = obj.AddComponent<DestructionDebris>();
-        }
+        var obj = new GameObject(label); obj.transform.SetParent(owner, true);
+        Vector3 center = Vector3.zero; foreach (var block in blocks) center += block.transform.position;
+        obj.transform.position = center / blocks.Count;
+        var body = obj.AddComponent<Rigidbody>();
+        body.useGravity = true; body.linearDamping = 0.02f; body.angularDamping = 0.1f;
+        body.solverIterations = 8;
+        body.solverVelocityIterations = 3;
+        body.interpolation = RigidbodyInterpolation.Interpolate;
+        body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        var chunk = obj.AddComponent<DestructionDebris>();
         foreach (var block in blocks)
         {
             Vector3 position = block.transform.position;
@@ -88,6 +84,7 @@ public static class DestructionSystem
         var ids = new List<string>();
         for (int i = 0; i < count; i++)
         {
+            if (!HasCapacity(damage.maxActiveDebris)) break;
             var block = ordered[i];
             if (block.Structure != null) structures.Add(block.Structure);
             ids.Add(block.StableId);
@@ -102,10 +99,10 @@ public static class DestructionSystem
             var target = hit.attachedRigidbody;
             if (target == null || target == ignoreBody || !bodies.Add(target)) continue;
             var chunk = target.GetComponent<DestructionDebris>();
-            if (chunk != null && !chunk.Wake(damage)) continue;
+            if (chunk != null) chunk.Wake();
             if (target.isKinematic) continue;
             target.AddExplosionForce(damage.impulse,damage.position,damage.radius,0.6f,ForceMode.Impulse);
         }
-        return count;
+        return ids.Count;
     }
 }

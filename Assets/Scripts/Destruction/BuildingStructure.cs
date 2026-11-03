@@ -16,7 +16,7 @@ public class BuildingStructure : MonoBehaviour
     {
         if (!dirty) return;
         if (lastDamage.maxActiveDebris == 0)
-            lastDamage = new ExplosionDamage { maxActiveDebris = 128, enableDebrisCleanup = true, debrisLifetime = 12 };
+            lastDamage = new ExplosionDamage { maxActiveDebris = 128, enableDebrisCleanup = false };
         CheckSupport(lastDamage);
     }
 

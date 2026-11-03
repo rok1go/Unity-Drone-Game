@@ -8,6 +8,14 @@ public class DroneExplosionEffect : MonoBehaviour
     private Renderer shell;
     private MaterialPropertyBlock properties;
     private float elapsed, radius, duration;
+    private static AudioClip explosionSound;
+
+    public static void PreloadAudio()
+    {
+        if (explosionSound == null) explosionSound = Resources.Load<AudioClip>("Audio/DroneExplosion");
+        if (explosionSound != null && explosionSound.loadState == AudioDataLoadState.Unloaded)
+            explosionSound.LoadAudioData();
+    }
 
     public static void Play(Vector3 position, Material material, float radius, float duration, int particleCount)
     {
@@ -15,6 +23,21 @@ public class DroneExplosionEffect : MonoBehaviour
         var effect = new GameObject("DroneExplosion");
         effect.transform.position = position;
         var animation = effect.AddComponent<DroneExplosionEffect>();
+        PreloadAudio();
+        if (explosionSound != null)
+        {
+            var audio = effect.AddComponent<AudioSource>();
+            audio.playOnAwake = false;
+            audio.clip = explosionSound;
+            audio.volume = 0.9f;
+            audio.spatialBlend = 1f;
+            audio.rolloffMode = AudioRolloffMode.Linear;
+            audio.minDistance = 4f;
+            audio.maxDistance = Mathf.Max(75f, radius * 12f);
+            audio.dopplerLevel = 0;
+            audio.Play();
+        }
+        ExplosionCameraShake.Play(position, Mathf.Max(25f, radius * 5f), 0.55f);
         animation.radius = radius; animation.duration = duration;
         animation.properties = new MaterialPropertyBlock();
         var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -51,7 +74,7 @@ public class DroneExplosionEffect : MonoBehaviour
         animation.flash.type = LightType.Point; animation.flash.color = new Color(1,0.55f,0.15f);
         animation.flash.range = radius; animation.flash.intensity = 12; animation.flash.shadows = LightShadows.None;
         particles.Play();
-        Destroy(effect, duration + 0.1f);
+        Destroy(effect, Mathf.Max(duration + 0.1f, explosionSound != null ? explosionSound.length + 0.15f : 0));
     }
 
     private void Update()

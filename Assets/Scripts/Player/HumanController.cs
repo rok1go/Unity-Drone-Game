@@ -10,7 +10,7 @@ public class HumanController : MonoBehaviour
     [Min(0)] public float walkSpeed = 3.5f;
     [Min(0)] public float sprintSpeed = 6f;
     [Min(0)] public float crouchSpeed = 1.8f;
-    [Min(0)] public float jumpHeight = 0.8f;
+    [Min(0)] public float jumpHeight = 2f;
     [Min(0.1f)] public float gravity = 20f;
     [Min(0.01f)] public float mouseSensitivity = 0.12f;
     [Min(1)] public float standingHeight = 1.8f;

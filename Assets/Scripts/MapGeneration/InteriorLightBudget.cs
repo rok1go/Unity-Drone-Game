@@ -4,7 +4,7 @@ using UnityEngine;
 /// <summary>Keep nearby interiors lit without exceeding the map's realtime light budget.</summary>
 public class InteriorLightBudget : MonoBehaviour
 {
-    [Range(0, 64)] public int maximumActive = 24;
+    [Range(0, 6)] public int maximumActive = 6;
     private Light[] lamps;
     private float nextRefresh;
 
@@ -25,6 +25,7 @@ public class InteriorLightBudget : MonoBehaviour
         });
         int active = 0;
         foreach (var lamp in lamps)
-            if (lamp != null) lamp.enabled = active++ < maximumActive;
+            if (lamp != null) lamp.enabled = active++ < Mathf.Clamp(maximumActive, 0, 6) &&
+                (lamp.transform.position - position).sqrMagnitude < 35f * 35f;
     }
 }

@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-// A compound chunk owns timed batches: merging bodies never restarts older fragments' timers.
+// Rubble persists by default; timed cleanup is an explicit opt-in.
 [RequireComponent(typeof(Rigidbody))]
 public class DestructionDebris : MonoBehaviour
 {
@@ -26,6 +26,7 @@ public class DestructionDebris : MonoBehaviour
     }
     private void Update()
     {
+        if (!CleanupEnabled) return;
         bool removed = false;
         for (int i = batches.Count - 1; i >= 0; i--)
         {
@@ -38,18 +39,11 @@ public class DestructionDebris : MonoBehaviour
         { gameObject.SetActive(false); Destroy(gameObject); return; }
         if (removed && Body != null)
         { Body.ResetCenterOfMass(); Body.ResetInertiaTensor(); }
-        FreezeIfResting();
     }
-    internal void FreezeIfResting()
+    internal void Wake()
     {
-        // New bodies can report sleeping before their first PhysX step.
-        if (Time.time - DetachedAt > 0.75f && Body != null && !Body.isKinematic && Body.IsSleeping())
-            Body.isKinematic = true;
-    }
-    internal bool Wake(ExplosionDamage damage)
-    {
-        if (!Body.isKinematic) return true;
-        if (!DestructionSystem.HasCapacity(damage.maxActiveDebris)) return false;
-        Body.isKinematic = false; Body.WakeUp(); return true;
+        // Normal PhysX sleep saves CPU while leaving bodies movable by collisions.
+        // Never turn settled rubble into static obstacles or gate waking on a budget.
+        if (Body != null) Body.WakeUp();
     }
 }

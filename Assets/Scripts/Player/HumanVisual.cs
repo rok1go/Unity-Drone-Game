@@ -11,13 +11,41 @@ public class HumanVisual : MonoBehaviour
     {
         parts = GetComponentsInChildren<Renderer>();
         if (controller == null) controller = GetComponentInParent<HumanController>();
-
+        SetFirstPersonVisibility(false);
     }
+
+    private void OnEnable()
+    {
+        Camera.onPreCull += BeforeCamera;
+        Camera.onPostRender += AfterCamera;
+    }
+
+    private void OnDisable()
+    {
+        Camera.onPreCull -= BeforeCamera;
+        Camera.onPostRender -= AfterCamera;
+        SetFirstPersonVisibility(false);
+    }
+
     private void LateUpdate()
     {
+        if (controller == null) return;
         transform.localScale = new Vector3(1, controller.CurrentHeight / controller.standingHeight, 1);
-        var mode = controller.IsControlled ? ShadowCastingMode.ShadowsOnly : ShadowCastingMode.On;
-        foreach (var part in parts) part.shadowCastingMode = mode;
+    }
+
+    private void BeforeCamera(Camera camera)
+    {
+        SetFirstPersonVisibility(controller != null && controller.IsControlled && camera == controller.viewCamera);
+    }
+
+    private void AfterCamera(Camera camera) => SetFirstPersonVisibility(false);
+
+    private void SetFirstPersonVisibility(bool firstPerson)
+    {
+        if (parts == null) return;
+        var mode = firstPerson ? ShadowCastingMode.ShadowsOnly : ShadowCastingMode.On;
+        foreach (var part in parts)
+            if (part != null) part.shadowCastingMode = mode;
     }
 }
 

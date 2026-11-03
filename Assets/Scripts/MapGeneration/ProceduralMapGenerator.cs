@@ -24,7 +24,7 @@ public class ProceduralMapGenerator : MonoBehaviour
 
     [Header("Interior lighting")]
     public bool enableInteriorLights = true;
-    [Range(0, 64)] public int maxInteriorLights = 24;
+    [Range(0, 6)] public int maxInteriorLights = 6;
     [Range(0.2f, 3f)] public float interiorLightIntensity = 1.2f;
 
     [Header("Solid colors")]
@@ -257,7 +257,7 @@ public class ProceduralMapGenerator : MonoBehaviour
             light.spotAngle = warehouse ? 125f : 115f;
             light.innerSpotAngle = 65f;
             light.renderMode = LightRenderMode.ForcePixel;
-            light.shadows = LightShadows.Hard;
+            light.shadows = LightShadows.None;
             light.shadowResolution = UnityEngine.Rendering.LightShadowResolution.Low;
             light.shadowBias = 0.02f;
             light.shadowNormalBias = 0.2f;

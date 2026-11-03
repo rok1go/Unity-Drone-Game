@@ -1,0 +1,70 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="osd" class="osd" picking-mode="Ignore">
+        <ui:VisualElement class="top-bar">
+            <ui:VisualElement class="identity">
+                <ui:Label text="FALCON  /  FPV–01" class="brand" />
+                <ui:Label text="● LIVE   /   FLIGHT TELEMETRY" class="eyebrow" />
+            </ui:VisualElement>
+            <ui:VisualElement class="compass">
+                <ui:Label text="·     ·     |     ·     ·" class="compass-ticks" />
+                <ui:Label name="heading" text="N   000°" class="heading" />
+            </ui:VisualElement>
+            <ui:VisualElement class="flight-status">
+                <ui:Label name="mode" text="ANGLE / СТАБИЛИЗАЦИЯ" class="mode" />
+                <ui:Label name="timer" text="00:00" class="timer" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:VisualElement class="aim-area">
+            <ui:VisualElement name="horizon" class="horizon">
+                <ui:VisualElement class="horizon-left" />
+                <ui:VisualElement class="horizon-right" />
+                <ui:VisualElement class="horizon-notch" />
+            </ui:VisualElement>
+            <ui:VisualElement class="reticle-left" />
+            <ui:VisualElement class="reticle-dot" />
+            <ui:VisualElement class="reticle-right" />
+            <ui:Label name="attitude" text="P 0°     R 0°" class="attitude" />
+        </ui:VisualElement>
+        <ui:VisualElement class="telemetry-left">
+            <ui:Label text="СКОРОСТЬ" class="eyebrow" />
+            <ui:VisualElement class="reading-row">
+                <ui:Label name="speed" text="000" class="big-reading" />
+                <ui:Label text="км/ч" class="unit" />
+            </ui:VisualElement>
+            <ui:VisualElement class="divider" />
+            <ui:Label text="ВЫСОТА НАД ЗЕМЛЁЙ" class="eyebrow" />
+            <ui:VisualElement class="reading-row">
+                <ui:Label name="altitude" text="0.0" class="altitude" />
+                <ui:Label text="м" class="unit" />
+            </ui:VisualElement>
+            <ui:Label name="climb" text="0.0 м/с" class="climb" />
+        </ui:VisualElement>
+        <ui:VisualElement class="telemetry-right">
+            <ui:Label text="ГАЗ" class="eyebrow" />
+            <ui:VisualElement class="throttle-track">
+                <ui:VisualElement name="throttleFill" class="throttle-fill" />
+                <ui:VisualElement class="hover-mark" />
+            </ui:VisualElement>
+            <ui:Label name="throttle" text="42%" class="throttle-reading" />
+            <ui:Label text="SPACE ↑&#10;CTRL ↓" class="throttle-keys" />
+        </ui:VisualElement>
+        <ui:VisualElement class="warning-wrap">
+            <ui:Label name="warning" text="" class="warning" />
+        </ui:VisualElement>
+        <ui:VisualElement class="bottom-bar">
+            <ui:VisualElement class="bottom-heading">
+                <ui:Label name="home" text="HOME  0 м" class="home" />
+                <ui:Label text="H — подсказки" class="muted" />
+            </ui:VisualElement>
+            <ui:VisualElement name="help" class="help">
+                <ui:Label text="W/S  тангаж     A/D  крен     МЫШЬ ↔  поворот дрона     МЫШЬ ↕  камера     C  камера вперёд" />
+                <ui:Label text="SPACE/CTRL  вверх / вниз     V  ANGLE / ACRO     B  моторы     F  подрыв     TAB  человек     R  сброс" />
+                <ui:Label text="ANGLE: отпусти Space/Ctrl — удержание высоты. Обратный наклон тормозит разгон." class="help-note" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+    </ui:VisualElement>
+    <ui:VisualElement name="pilotHint" class="pilot-hint" picking-mode="Ignore">
+        <ui:Label text="FALCON / FPV" class="hint-brand" />
+        <ui:Label name="hint" text="TAB — FPV дрон" />
+    </ui:VisualElement>
+</ui:UXML>
