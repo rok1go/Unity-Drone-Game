@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -35,6 +36,7 @@ public class MapRenderBatcher : MonoBehaviour
 
 public class MapRenderChunk : MonoBehaviour
 {
+    private static readonly ProfilerMarker RebuildMarker = new ProfilerMarker("Slop.MapMeshRebuild");
     private readonly List<MeshFilter> sources = new List<MeshFilter>();
     private Mesh mesh;
     private MeshRenderer chunkRenderer;
@@ -65,6 +67,7 @@ public class MapRenderChunk : MonoBehaviour
 
     public void Rebuild()
     {
+        using var sample = RebuildMarker.Auto();
         dirty = false;
         var combines = new List<CombineInstance>(sources.Count);
         Matrix4x4 toLocal = transform.worldToLocalMatrix;

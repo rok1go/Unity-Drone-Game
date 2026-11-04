@@ -43,6 +43,7 @@ public class DroneController : MonoBehaviour
     public bool enableDebrisCleanup = false;
     [Min(0.25f)] public float debrisLifetime = 12f;
     public PhysicsMaterial debrisContactMaterial;
+    [Min(0.5f)] public float impactFractureSpeed = 6f;
     [Header("Explosion visuals")]
     [Range(0.3f, 4f)] public float explosionEffectDuration = 1.4f;
     [Range(16, 512)] public int explosionParticleCount = 160;
@@ -115,7 +116,12 @@ public class DroneController : MonoBehaviour
         pitchInput = rollInput = yawInput = verticalInput = 0;
         mouseYawRate = 0;
         if (MotorsArmed && !IsDestroyed) FlightSeconds += Time.deltaTime;
-        if (!IsControlled || Cursor.lockState != CursorLockMode.Locked) return;
+        if (!IsControlled || Cursor.lockState != CursorLockMode.Locked)
+        {
+            if (gamepadInputActive) altitudeTarget = body.position.y;
+            gamepadInputActive = false;
+            return;
+        }
         var keyboard = Keyboard.current;
         Vector2 look = Mouse.current != null ? Mouse.current.delta.ReadValue() : Vector2.zero;
         // Horizontal mouse turns the drone; vertical mouse only looks up/down.
@@ -123,15 +129,15 @@ public class DroneController : MonoBehaviour
         cameraPitch = Mathf.Clamp(cameraPitch - look.y * cameraMouseSensitivity, -85f, 85f);
         if (viewCamera != null)
             viewCamera.transform.localRotation = Quaternion.Euler(cameraPitch, 0, 0);
+        bool keyboardFlight = false;
         if (keyboard != null)
         {
             pitchInput = (keyboard.wKey.isPressed ? 1 : 0) - (keyboard.sKey.isPressed ? 1 : 0);
             rollInput = (keyboard.dKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed ? 1 : 0);
             verticalInput = (keyboard.spaceKey.isPressed ? 1 : 0) -
                 (keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed ? 1 : 0);
-            if (verticalInput != 0 || keyboard.wKey.isPressed || keyboard.sKey.isPressed || keyboard.aKey.isPressed ||
-                keyboard.dKey.isPressed)
-                gamepadInputActive = false;
+            keyboardFlight = verticalInput != 0 || pitchInput != 0 || rollInput != 0;
+            if (keyboardFlight) gamepadInputActive = false;
             if (keyboard.cKey.wasPressedThisFrame) CenterCamera();
             if (keyboard.vKey.wasPressedThisFrame) ToggleFlightMode();
             if (keyboard.bKey.wasPressedThisFrame) SetMotorsArmed(!MotorsArmed);
@@ -141,7 +147,7 @@ public class DroneController : MonoBehaviour
         if (pad != null)
         {
             Vector2 right = pad.rightStick.ReadValue(), left = pad.leftStick.ReadValue();
-            if (right.sqrMagnitude + left.sqrMagnitude > 0.01f) gamepadInputActive = true;
+            if (!keyboardFlight && right.sqrMagnitude + left.sqrMagnitude > 0.01f) gamepadInputActive = true;
             if (gamepadInputActive)
             {
                 pitchInput = right.y; rollInput = right.x; yawInput = left.x;
@@ -243,7 +249,10 @@ public class DroneController : MonoBehaviour
             Vector3 localUp = new Vector3(smoothedTiltInput.x * horizontal, Mathf.Cos(angle),
                 smoothedTiltInput.y * horizontal);
             Vector3 targetUp = Quaternion.Euler(0, transform.eulerAngles.y, 0) * localUp;
-            Vector3 correction = transform.InverseTransformDirection(Vector3.Cross(transform.up, targetUp)) * levelingResponse;
+            Quaternion.FromToRotation(transform.up, targetUp).ToAngleAxis(out float errorAngle, out Vector3 axis);
+            Vector3 correction = errorAngle > 0.01f
+                ? transform.InverseTransformDirection(axis) * (Mathf.DeltaAngle(0, errorAngle) * Mathf.Deg2Rad * levelingResponse)
+                : Vector3.zero;
             targetRates = new Vector3(correction.x, commandedYaw, correction.z);
         }
         else targetRates = new Vector3(smoothedTiltInput.y * acroRate * Mathf.Deg2Rad,
@@ -268,9 +277,11 @@ public class DroneController : MonoBehaviour
         {
             position = position, radius = explosionRadius, impulse = explosionImpulse,
             maxFragments = maxFragmentsPerExplosion, maxActiveDebris = maxActiveDebris, debrisLifetime = debrisLifetime,
-            enableDebrisCleanup = enableDebrisCleanup, contactMaterial = debrisContactMaterial
+            enableDebrisCleanup = enableDebrisCleanup, contactMaterial = debrisContactMaterial,
+            impactFractureSpeed = impactFractureSpeed
         }, body);
-        DroneExplosionEffect.Play(position, explosionMaterial, explosionRadius, explosionEffectDuration, explosionParticleCount);
+        DroneExplosionEffect.Play(position, explosionMaterial, explosionRadius, explosionEffectDuration,
+            explosionParticleCount, explosionImpulse / 21f);
         IsDestroyed = true; IsArmed = false;
         SetControlled(false);
         gameObject.SetActive(false);

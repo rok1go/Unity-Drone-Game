@@ -7,7 +7,7 @@ public class DroneExplosionEffect : MonoBehaviour
     private Transform shockwave;
     private Renderer shell;
     private MaterialPropertyBlock properties;
-    private float elapsed, radius, duration;
+    private float elapsed, radius, duration, strength;
     private static AudioClip explosionSound;
 
     public static void PreloadAudio()
@@ -17,19 +17,21 @@ public class DroneExplosionEffect : MonoBehaviour
             explosionSound.LoadAudioData();
     }
 
-    public static void Play(Vector3 position, Material material, float radius, float duration, int particleCount)
+    public static void Play(Vector3 position, Material material, float radius, float duration, int particleCount, float strength = 1f)
     {
         radius = Mathf.Max(0.1f, radius); duration = Mathf.Max(0.3f, duration);
         var effect = new GameObject("DroneExplosion");
         effect.transform.position = position;
         var animation = effect.AddComponent<DroneExplosionEffect>();
+        strength = Mathf.Clamp(strength, 0.15f, 2f);
+        animation.strength = strength;
         PreloadAudio();
         if (explosionSound != null)
         {
             var audio = effect.AddComponent<AudioSource>();
             audio.playOnAwake = false;
             audio.clip = explosionSound;
-            audio.volume = 0.9f;
+            audio.volume = Mathf.Clamp01(0.9f * strength);
             audio.spatialBlend = 1f;
             audio.rolloffMode = AudioRolloffMode.Linear;
             audio.minDistance = 4f;
@@ -37,7 +39,7 @@ public class DroneExplosionEffect : MonoBehaviour
             audio.dopplerLevel = 0;
             audio.Play();
         }
-        ExplosionCameraShake.Play(position, Mathf.Max(25f, radius * 5f), 0.55f);
+        ExplosionCameraShake.Play(position, Mathf.Max(25f, radius * 5f), 0.55f, strength);
         animation.radius = radius; animation.duration = duration;
         animation.properties = new MaterialPropertyBlock();
         var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -60,7 +62,8 @@ public class DroneExplosionEffect : MonoBehaviour
         main.startSize = new ParticleSystem.MinMaxCurve(radius * 0.025f, radius * 0.08f);
         main.startColor = new ParticleSystem.MinMaxGradient(new Color(1,0.3f,0.03f), new Color(1,0.85f,0.2f));
         main.simulationSpace = ParticleSystemSimulationSpace.World;
-        main.maxParticles = Mathf.Clamp(particleCount, 16, 512);
+        particleCount = Mathf.Clamp(Mathf.RoundToInt(particleCount * Mathf.Sqrt(strength)), 16, 512);
+        main.maxParticles = particleCount;
         var emission = particles.emission; emission.rateOverTime = 0;
         emission.SetBursts(new[] { new ParticleSystem.Burst(0, (short)Mathf.Clamp(particleCount,16,512)) });
         var shape = particles.shape; shape.shapeType = ParticleSystemShapeType.Sphere; shape.radius = 0.05f;
@@ -72,7 +75,7 @@ public class DroneExplosionEffect : MonoBehaviour
         fade.color = gradient;
         animation.flash = effect.AddComponent<Light>();
         animation.flash.type = LightType.Point; animation.flash.color = new Color(1,0.55f,0.15f);
-        animation.flash.range = radius; animation.flash.intensity = 12; animation.flash.shadows = LightShadows.None;
+        animation.flash.range = radius; animation.flash.intensity = 12 * strength; animation.flash.shadows = LightShadows.None;
         particles.Play();
         Destroy(effect, Mathf.Max(duration + 0.1f, explosionSound != null ? explosionSound.length + 0.15f : 0));
     }
@@ -80,7 +83,7 @@ public class DroneExplosionEffect : MonoBehaviour
     private void Update()
     {
         elapsed += Time.deltaTime;
-        if (flash != null) flash.intensity = 12 * Mathf.Clamp01(1 - elapsed / 0.18f);
+        if (flash != null) flash.intensity = 12 * strength * Mathf.Clamp01(1 - elapsed / 0.18f);
         float progress = Mathf.Clamp01(elapsed / (duration * 0.55f));
         shockwave.localScale = Vector3.one * Mathf.Max(0.01f, radius * 2 * progress);
         Color color = new Color(1,0.5f,0.12f,0.18f * (1 - progress));

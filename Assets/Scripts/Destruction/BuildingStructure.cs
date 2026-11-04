@@ -7,6 +7,7 @@ public class BuildingStructure : MonoBehaviour
     private static readonly Vector3Int[] neighbours = { Vector3Int.left, Vector3Int.right, Vector3Int.up,
         Vector3Int.down, new Vector3Int(0,0,1), new Vector3Int(0,0,-1) };
     private bool dirty;
+    private double lastCheckStep = double.NaN;
     private ExplosionDamage lastDamage;
     public int SupportCheckCount { get; private set; }
     public int LastUnsupportedBlockCount { get; private set; }
@@ -14,7 +15,7 @@ public class BuildingStructure : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (!dirty) return;
+        if (!dirty || lastCheckStep == Time.fixedTimeAsDouble || !DestructionSystem.HasStepCapacity()) return;
         if (lastDamage.maxActiveDebris == 0)
             lastDamage = new ExplosionDamage { maxActiveDebris = 128, enableDebrisCleanup = false };
         CheckSupport(lastDamage);
@@ -23,7 +24,14 @@ public class BuildingStructure : MonoBehaviour
     public int CheckSupport(ExplosionDamage damage)
     {
         if (!Application.isPlaying) return 0;
-        dirty = false; lastDamage = damage; SupportCheckCount++;
+        lastDamage = damage;
+        if (!DestructionSystem.HasStepCapacity())
+        {
+            dirty = true;
+            return 0;
+        }
+        dirty = false; SupportCheckCount++;
+        lastCheckStep = Time.fixedTimeAsDouble;
         var grid = new Dictionary<Vector3Int, DestructibleBlock>();
         foreach (var block in GetComponentsInChildren<DestructibleBlock>())
             if (block.Structure == this && !block.IsDetached) grid[block.GridCell] = block;
@@ -55,7 +63,11 @@ public class BuildingStructure : MonoBehaviour
                 foreach (var step in neighbours)
                     if (remaining.Remove(cell + step)) queue.Enqueue(cell + step);
             }
-            DestructionSystem.DetachGroup(group, damage, "CollapsedStructure");
+            if (DestructionSystem.DetachGroup(group, damage, "CollapsedStructure") == null)
+            {
+                dirty = true;
+                break;
+            }
         }
         return collapsed;
     }

@@ -1733564,6 +1733564,7 @@ MonoBehaviour:
   enableDebrisCleanup: 0
   debrisLifetime: 12
   debrisContactMaterial: {fileID: 13400000, guid: 1cd69559845d9c64a955d867901e4c10, type: 2}
+  impactFractureSpeed: 6
   explosionEffectDuration: 1.4
   explosionParticleCount: 160
 --- !u!4 &1717496317

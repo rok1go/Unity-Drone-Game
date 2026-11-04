@@ -17,7 +17,7 @@ public class ExplosionCameraShake : MonoBehaviour
             camera.gameObject.AddComponent<ExplosionCameraShake>();
     }
 
-    public static void Play(Vector3 position, float range, float seconds)
+    public static void Play(Vector3 position, float range, float seconds, float strength = 1f)
     {
         foreach (var shake in FindObjectsByType<ExplosionCameraShake>(FindObjectsInactive.Include, FindObjectsSortMode.None))
         {
@@ -25,7 +25,7 @@ public class ExplosionCameraShake : MonoBehaviour
             float attenuation = Mathf.Clamp01(1f - distance / Mathf.Max(1f, range));
             if (attenuation <= 0) continue;
             float remaining = shake.duration > 0 ? Mathf.Clamp01(1f - (Time.unscaledTime - shake.startedAt) / shake.duration) : 0;
-            shake.strength = Mathf.Clamp01(shake.strength * remaining + attenuation * attenuation);
+            shake.strength = Mathf.Clamp01(shake.strength * remaining + attenuation * attenuation * strength);
             shake.startedAt = Time.unscaledTime;
             shake.duration = Mathf.Max(0.05f, seconds);
         }
