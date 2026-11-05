@@ -1,6 +1,4 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -11,9 +9,9 @@ public class DroneController : MonoBehaviour
     public enum FlightMode { Angle, Acro }
     [Header("FPV flight")]
     public FlightMode flightMode = FlightMode.Angle;
-    [Range(15, 70)] public float maximumTilt = 30f;
+    [Range(15, 70)] public float maximumTilt = 31.5f;
     [Tooltip("Time constant for smoothing pitch/roll input in seconds.")]
-    [Range(0.05f, 0.5f)] public float tiltInputSmoothing = 0.18f;
+    [Range(0.05f, 0.5f)] public float tiltInputSmoothing = 0.165f;
     [Range(1.2f, 5f)] public float thrustToWeight = 2.4f;
     [Range(90, 720)] public float acroRate = 300f;
     [Range(45, 360)] public float yawRate = 150f;
@@ -27,6 +25,13 @@ public class DroneController : MonoBehaviour
     [Range(1f, 8f)] public float throttleResponse = 3f;
     [Range(0.005f, 0.1f)] public float airDrag = 0.025f;
     [Range(0, 0.8f)] public float stickExpo = 0.35f;
+    [Header("ANGLE hover assist")]
+    [Tooltip("Horizontal velocity damping when the movement stick/buttons are released (per second).")]
+    [Range(0f, 10f)] public float hoverBraking = 3.5f;
+    [Tooltip("Maximum assisted braking acceleration in metres per second squared.")]
+    [Min(0f)] public float maxHoverBrakeAcceleration = 9f;
+    [Tooltip("Time to release the bank command when movement input returns to centre.")]
+    [Range(0.02f, 0.5f)] public float tiltReleaseSmoothing = 0.06f;
     [Header("FPV camera")]
     [Range(0.02f, 0.5f)] public float cameraMouseSensitivity = 0.12f;
     [Range(0, 40)] public float cameraUptilt = 15f;
@@ -34,7 +39,10 @@ public class DroneController : MonoBehaviour
     [Header("Self destruct")]
     [Min(0.1f)] public float explosionRadius = 7f;
     [Min(0)] public float explosionImpulse = 21f;
-    [Min(0)] public float selfDestructDelay = 1f;
+    [Tooltip("Minimum total relative collision speed to detonate, in metres per second (35 km/h by default).")]
+    [Min(1f)] public float impactDetonationSpeed = 35f / 3.6f;
+    [Tooltip("Also require this much speed into the surface, in metres per second, so light glancing contacts do not detonate.")]
+    [Min(0f)] public float minimumImpactNormalSpeed = 4f;
     public Material explosionMaterial;
     [Header("Destruction budget")]
     [Range(1, 128)] public int maxFragmentsPerExplosion = 80;
@@ -54,13 +62,13 @@ public class DroneController : MonoBehaviour
     public float Throttle { get; private set; }
     public float HoverThrottle => 1f / Mathf.Max(1.2f, thrustToWeight);
     public float FlightSeconds { get; private set; }
-    public float DetonationRemaining => IsArmed ? Mathf.Max(0, detonationAt - Time.time) : 0;
+    public float DetonationRemaining => 0f;
     public Vector3 HomePosition => spawnPosition;
     public Vector3 StickInput => new Vector3(pitchInput, yawInput, rollInput);
     public Vector3 Velocity => body != null && !body.isKinematic ? body.linearVelocity : Vector3.zero;
     public event Action Exploded;
     private Rigidbody body;
-    private float pitchInput, rollInput, yawInput, detonationAt;
+    private float pitchInput, rollInput, yawInput;
     private float verticalInput, altitudeTarget;
     private float cameraPitch, mouseYawRate;
     private Vector2 smoothedTiltInput;
@@ -143,6 +151,7 @@ public class DroneController : MonoBehaviour
             if (keyboard.bKey.wasPressedThisFrame) SetMotorsArmed(!MotorsArmed);
             if (keyboard.fKey.wasPressedThisFrame) BeginSelfDestruct();
         }
+        if (IsDestroyed) return;
         var pad = Gamepad.current;
         if (pad != null)
         {
@@ -157,6 +166,7 @@ public class DroneController : MonoBehaviour
             if (pad.buttonWest.wasPressedThisFrame) ToggleFlightMode();
             if (pad.buttonNorth.wasPressedThisFrame) BeginSelfDestruct();
         }
+        if (IsDestroyed) return;
         else gamepadInputActive = false;
         // Circular stick range: diagonal input has the same strength as one axis.
         Vector2 tilt = Vector2.ClampMagnitude(new Vector2(rollInput, pitchInput), 1f);
@@ -197,12 +207,23 @@ public class DroneController : MonoBehaviour
     private void FixedUpdate()
     {
         if (IsDestroyed) return;
-        // Quadratic air resistance acts in flight, not a target-velocity brake.
+        // Passive air resistance also applies with the motors off.
         body.AddForce(-body.linearVelocity * body.linearVelocity.magnitude * airDrag, ForceMode.Acceleration);
         if (!MotorsArmed) return;
         Vector2 requestedTilt = Vector2.ClampMagnitude(new Vector2(rollInput, pitchInput), 1f);
-        float blend = 1f - Mathf.Exp(-Time.fixedDeltaTime / Mathf.Max(0.01f, tiltInputSmoothing));
+        bool releasingTilt = flightMode == FlightMode.Angle && requestedTilt.sqrMagnitude < 0.0001f;
+        float smoothing = releasingTilt ? Mathf.Min(tiltInputSmoothing, tiltReleaseSmoothing) : tiltInputSmoothing;
+        float blend = 1f - Mathf.Exp(-Time.fixedDeltaTime / Mathf.Max(0.01f, smoothing));
         smoothedTiltInput = Vector2.Lerp(smoothedTiltInput, requestedTilt, blend);
+        if (releasingTilt)
+        {
+            // Brake only at neutral input so small stick movements stay responsive.
+            Vector3 horizontalVelocity = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+            float damping = (1f - Mathf.Exp(-Mathf.Max(0f, hoverBraking) * Time.fixedDeltaTime)) / Time.fixedDeltaTime;
+            Vector3 braking = Vector3.ClampMagnitude(-horizontalVelocity * damping,
+                Mathf.Max(0f, maxHoverBrakeAcceleration));
+            body.AddForce(braking, ForceMode.Acceleration);
+        }
         if (!gamepadInputActive)
         {
             float targetThrottle;
@@ -264,14 +285,29 @@ public class DroneController : MonoBehaviour
     public void BeginSelfDestruct()
     {
         if (!IsControlled || IsArmed || IsDestroyed) return;
-        IsArmed = true;
-        detonationAt = Time.time + selfDestructDelay;
-        StartCoroutine(DetonateAfterDelay());
+        Detonate();
     }
 
-    private IEnumerator DetonateAfterDelay()
+    private void OnCollisionEnter(Collision collision)
     {
-        yield return new WaitForSeconds(selfDestructDelay);
+        if (IsDestroyed) return;
+        // Require both fast travel and a meaningful hit into the surface, rather than a scrape.
+        if (collision.relativeVelocity.sqrMagnitude < impactDetonationSpeed * impactDetonationSpeed) return;
+        for (int i = 0; i < collision.contactCount; i++)
+        {
+            float normalSpeed = Mathf.Abs(Vector3.Dot(collision.relativeVelocity, collision.GetContact(i).normal));
+            if (normalSpeed < minimumImpactNormalSpeed) continue;
+            Detonate();
+            return;
+        }
+    }
+
+    private void Detonate()
+    {
+        if (IsDestroyed) return;
+        // Latch before applying damage: one collision can report several contacts.
+        IsDestroyed = true;
+        IsArmed = false;
         Vector3 position = body.position;
         DestructionSystem.ApplyExplosion(new ExplosionDamage
         {
@@ -282,7 +318,6 @@ public class DroneController : MonoBehaviour
         }, body);
         DroneExplosionEffect.Play(position, explosionMaterial, explosionRadius, explosionEffectDuration,
             explosionParticleCount, explosionImpulse / 21f);
-        IsDestroyed = true; IsArmed = false;
         SetControlled(false);
         gameObject.SetActive(false);
         Exploded?.Invoke();

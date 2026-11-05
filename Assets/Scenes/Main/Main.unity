@@ -1733538,8 +1733538,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::DroneController
   viewCamera: {fileID: 1562290935}
   flightMode: 0
-  maximumTilt: 30
-  tiltInputSmoothing: 0.18
+  maximumTilt: 31.5
+  tiltInputSmoothing: 0.165
   thrustToWeight: 2.4
   acroRate: 300
   yawRate: 150
@@ -1733552,12 +1733552,15 @@ MonoBehaviour:
   throttleResponse: 3
   airDrag: 0.025
   stickExpo: 0.35
+  hoverBraking: 3.5
+  maxHoverBrakeAcceleration: 9
+  tiltReleaseSmoothing: 0.06
   cameraMouseSensitivity: 0.12
   cameraUptilt: 15
   cameraFieldOfView: 100
   explosionRadius: 7
   explosionImpulse: 21
-  selfDestructDelay: 1
+  impactDetonationSpeed: 9.722222
   explosionMaterial: {fileID: 2100000, guid: 41ca9bfdac8db0b40bc9a5b79ac47703, type: 2}
   maxFragmentsPerExplosion: 80
   maxActiveDebris: 128
