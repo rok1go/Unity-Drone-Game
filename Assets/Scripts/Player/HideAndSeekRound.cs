@@ -1,0 +1,91 @@
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.SceneManagement;
+
+[DisallowMultipleComponent]
+public class HideAndSeekRound : MonoBehaviour
+{
+    public enum RoundPhase { Hiding, Hunting, Finished }
+    [Min(1f)] public float hidingSeconds = 30f;
+    [Min(1f)] public float huntingSeconds = 240f;
+    public RoundPhase Phase { get; private set; }
+    public bool DronesWon { get; private set; }
+    public bool IsRestarting { get; private set; }
+    public bool CanControlDrone => initialized && Phase == RoundPhase.Hunting;
+    public float RemainingSeconds => Phase == RoundPhase.Finished ? 0f : Mathf.Max(0f, phaseEndsAt - Time.time);
+    public int TotalHumans => humans.Count;
+    public int AliveHumans
+    {
+        get
+        {
+            int count = 0;
+            foreach (var human in humans)
+                if (human != null && !human.IsEliminated) count++;
+            return count;
+        }
+    }
+
+    private readonly List<HumanController> humans = new List<HumanController>();
+    private LocalControlSwitcher controls;
+    private float phaseEndsAt;
+    private bool initialized;
+
+    public void Initialize(LocalControlSwitcher switcher)
+    {
+        if (initialized) return;
+        controls = switcher;
+        foreach (var human in FindObjectsByType<HumanController>(FindObjectsInactive.Include))
+            if (human.gameObject.scene == gameObject.scene) humans.Add(human);
+        initialized = true;
+        Phase = RoundPhase.Hiding;
+        phaseEndsAt = Time.time + hidingSeconds;
+        if (controls.drone != null) controls.drone.SetFlightLocked(true);
+        controls.SetDroneControl(false);
+    }
+
+    private void Update()
+    {
+        if (!initialized || Phase == RoundPhase.Finished) return;
+        if (humans.Count > 0 && AliveHumans == 0)
+        {
+            Finish(true);
+            return;
+        }
+        if (Time.time < phaseEndsAt) return;
+        if (Phase == RoundPhase.Hiding)
+        {
+            Phase = RoundPhase.Hunting;
+            phaseEndsAt = Time.time + huntingSeconds;
+            if (controls.drone != null) controls.drone.SetFlightLocked(false);
+            // Local prototype: hide the human first, then search with the drone.
+            controls.SetDroneControl(true);
+        }
+        else Finish(false);
+    }
+
+    private void Finish(bool dronesWon)
+    {
+        Phase = RoundPhase.Finished;
+        DronesWon = dronesWon;
+        foreach (var human in humans)
+            if (human != null) human.SetControlled(false);
+        controls.ShowRoundResult();
+    }
+
+    public void RestartRound()
+    {
+        if (Phase != RoundPhase.Finished || IsRestarting) return;
+        IsRestarting = true;
+        // Reload the authored scene to restore every wall, prop, spawn and health value.
+        try
+        {
+            if (SceneManager.LoadSceneAsync(gameObject.scene.path, LoadSceneMode.Single) == null)
+                IsRestarting = false;
+        }
+        catch (System.Exception exception)
+        {
+            IsRestarting = false;
+            Debug.LogException(exception, this);
+        }
+    }
+}

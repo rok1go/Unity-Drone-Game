@@ -59442,6 +59442,7 @@ MonoBehaviour:
   crouchingHeight: 1.1
   movementAcceleration: 25
   airControl: 0.25
+  maxHealth: 100
 --- !u!4 &58684615
 Transform:
   m_ObjectHideFlags: 0
@@ -799351,6 +799352,7 @@ GameObject:
   m_Component:
   - component: {fileID: 802966050}
   - component: {fileID: 802966049}
+  - component: {fileID: 802966051}
   m_Layer: 0
   m_Name: LocalTestRig
   m_TagString: Untagged
@@ -799391,6 +799393,20 @@ Transform:
   - {fileID: 1717496317}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &802966051
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 802966048}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 62fdd2a5a45392f4d9002106c70d0dd8, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::HideAndSeekRound
+  hidingSeconds: 30
+  huntingSeconds: 240
 --- !u!1 &803157670
 GameObject:
   m_ObjectHideFlags: 0
@@ -1733560,7 +1733576,9 @@ MonoBehaviour:
   cameraFieldOfView: 100
   explosionRadius: 7
   explosionImpulse: 21
+  maximumHumanDamage: 150
   impactDetonationSpeed: 9.722222
+  minimumImpactNormalSpeed: 4
   explosionMaterial: {fileID: 2100000, guid: 41ca9bfdac8db0b40bc9a5b79ac47703, type: 2}
   maxFragmentsPerExplosion: 80
   maxActiveDebris: 128

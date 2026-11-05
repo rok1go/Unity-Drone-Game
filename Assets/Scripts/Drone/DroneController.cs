@@ -39,6 +39,8 @@ public class DroneController : MonoBehaviour
     [Header("Self destruct")]
     [Min(0.1f)] public float explosionRadius = 7f;
     [Min(0)] public float explosionImpulse = 21f;
+    [Tooltip("Damage to an exposed human at the blast centre; decreases to zero at the radius edge.")]
+    [Min(0f)] public float maximumHumanDamage = 150f;
     [Tooltip("Minimum total relative collision speed to detonate, in metres per second (35 km/h by default).")]
     [Min(1f)] public float impactDetonationSpeed = 35f / 3.6f;
     [Tooltip("Also require this much speed into the surface, in metres per second, so light glancing contacts do not detonate.")]
@@ -56,6 +58,7 @@ public class DroneController : MonoBehaviour
     [Range(0.3f, 4f)] public float explosionEffectDuration = 1.4f;
     [Range(16, 512)] public int explosionParticleCount = 160;
     public bool IsControlled { get; private set; }
+    public bool IsFlightLocked { get; private set; }
     public bool IsArmed { get; private set; }
     public bool IsDestroyed { get; private set; }
     public bool MotorsArmed { get; private set; }
@@ -105,7 +108,7 @@ public class DroneController : MonoBehaviour
     public void SetControlled(bool controlled)
     {
         if (body == null) body = GetComponent<Rigidbody>();
-        IsControlled = controlled && !IsDestroyed;
+        IsControlled = controlled && !IsDestroyed && !IsFlightLocked;
         pitchInput = rollInput = yawInput = verticalInput = 0;
         smoothedTiltInput = Vector2.zero;
         mouseYawRate = 0;
@@ -175,6 +178,29 @@ public class DroneController : MonoBehaviour
         rollInput = tilt.x; pitchInput = tilt.y; yawInput = Expo(yawInput);
     }
 
+    public void SetFlightLocked(bool locked)
+    {
+        if (body == null) body = GetComponent<Rigidbody>();
+        if (locked)
+        {
+            SetControlled(false);
+            if (!body.isKinematic)
+            {
+                body.linearVelocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+            // ContinuousDynamic is not supported on a parked kinematic body.
+            body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+            body.isKinematic = true;
+        }
+        else
+        {
+            body.isKinematic = false;
+            body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        }
+        IsFlightLocked = locked;
+    }
+
     private float Expo(float value)
     {
         value = Mathf.Clamp(value, -1, 1);
@@ -206,7 +232,7 @@ public class DroneController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (IsDestroyed) return;
+        if (IsDestroyed || IsFlightLocked) return;
         // Passive air resistance also applies with the motors off.
         body.AddForce(-body.linearVelocity * body.linearVelocity.magnitude * airDrag, ForceMode.Acceleration);
         if (!MotorsArmed) return;
@@ -290,7 +316,7 @@ public class DroneController : MonoBehaviour
 
     private void OnCollisionEnter(Collision collision)
     {
-        if (IsDestroyed) return;
+        if (IsDestroyed || IsFlightLocked) return;
         // Require both fast travel and a meaningful hit into the surface, rather than a scrape.
         if (collision.relativeVelocity.sqrMagnitude < impactDetonationSpeed * impactDetonationSpeed) return;
         for (int i = 0; i < collision.contactCount; i++)
@@ -314,7 +340,7 @@ public class DroneController : MonoBehaviour
             position = position, radius = explosionRadius, impulse = explosionImpulse,
             maxFragments = maxFragmentsPerExplosion, maxActiveDebris = maxActiveDebris, debrisLifetime = debrisLifetime,
             enableDebrisCleanup = enableDebrisCleanup, contactMaterial = debrisContactMaterial,
-            impactFractureSpeed = impactFractureSpeed
+            impactFractureSpeed = impactFractureSpeed, humanDamage = maximumHumanDamage
         }, body);
         DroneExplosionEffect.Play(position, explosionMaterial, explosionRadius, explosionEffectDuration,
             explosionParticleCount, explosionImpulse / 21f);

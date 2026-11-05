@@ -35,7 +35,10 @@ public class HumanVisual : MonoBehaviour
 
     private void BeforeCamera(Camera camera)
     {
-        SetFirstPersonVisibility(controller != null && controller.IsControlled && camera == controller.viewCamera);
+        var spectator = camera.GetComponent<SpectatorController>();
+        SetFirstPersonVisibility(controller != null &&
+            ((controller.IsControlled && camera == controller.viewCamera) ||
+             (spectator != null && spectator.ObservedHuman == controller)));
     }
 
     private void AfterCamera(Camera camera) => SetFirstPersonVisibility(false);

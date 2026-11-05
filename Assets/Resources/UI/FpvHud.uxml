@@ -1,70 +1,96 @@
-<ui:UXML xmlns:ui="UnityEngine.UIElements">
-    <ui:VisualElement name="osd" class="osd" picking-mode="Ignore">
-        <ui:VisualElement class="top-bar">
-            <ui:VisualElement class="identity">
-                <ui:Label text="FALCON  /  FPV–01" class="brand" />
-                <ui:Label text="● LIVE   /   FLIGHT TELEMETRY" class="eyebrow" />
+﻿<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <ui:VisualElement name="hudRoot" class="game-hud" picking-mode="Ignore">
+        <ui:VisualElement class="round-header">
+            <ui:VisualElement class="role-panel">
+                <ui:VisualElement name="roleIcon" class="role-icon">
+                    <ui:VisualElement class="role-head" />
+                    <ui:VisualElement class="role-body" />
+                </ui:VisualElement>
+                <ui:Label name="playerRole" text="Человек" class="role" />
             </ui:VisualElement>
-            <ui:VisualElement class="compass">
-                <ui:Label text="·     ·     |     ·     ·" class="compass-ticks" />
-                <ui:Label name="heading" text="N   000°" class="heading" />
-            </ui:VisualElement>
-            <ui:VisualElement class="flight-status">
-                <ui:Label name="mode" text="ANGLE / СТАБИЛИЗАЦИЯ" class="mode" />
-                <ui:Label name="timer" text="00:00" class="timer" />
+            <ui:VisualElement name="alivePanel" class="alive-panel">
+                <ui:Label name="aliveCount" text="В живых: 1 / 1" class="alive-count" />
             </ui:VisualElement>
         </ui:VisualElement>
-        <ui:VisualElement class="aim-area">
-            <ui:VisualElement name="horizon" class="horizon">
-                <ui:VisualElement class="horizon-left" />
-                <ui:VisualElement class="horizon-right" />
-                <ui:VisualElement class="horizon-notch" />
+        <ui:VisualElement class="clock-group">
+            <ui:VisualElement class="clock-rule" />
+            <ui:VisualElement name="clockPanel" class="round-clock">
+                <ui:Label name="roundTimer" text="0:30" class="round-time" />
+                <ui:Label name="roundPhase" text="Прячьтесь" class="round-phase" />
             </ui:VisualElement>
-            <ui:VisualElement class="reticle-left" />
-            <ui:VisualElement class="reticle-dot" />
-            <ui:VisualElement class="reticle-right" />
-            <ui:Label name="attitude" text="P 0°     R 0°" class="attitude" />
+            <ui:VisualElement class="clock-rule" />
         </ui:VisualElement>
-        <ui:VisualElement class="telemetry-left">
-            <ui:Label text="СКОРОСТЬ" class="eyebrow" />
-            <ui:VisualElement class="reading-row">
-                <ui:Label name="speed" text="000" class="big-reading" />
-                <ui:Label text="км/ч" class="unit" />
+        <ui:VisualElement name="osd" class="drone-osd">
+            <ui:VisualElement name="flightGeometry" class="flight-geometry" />
+            <ui:Label name="flightMode" text="FPV / ANGLE" class="osd-identity" />
+            <ui:Label name="flightClock" text="В ПОЛЁТЕ 00:00" class="osd-clock" />
+            <ui:Label name="flightState" text="МОТОРЫ ВКЛ." class="osd-state" />
+            <ui:Label name="droneHeading" text="000°" class="osd-heading" />
+            <ui:Label name="speed" text="0.0" class="osd-speed" />
+            <ui:Label text="км/ч" class="osd-speed-unit" />
+            <ui:Label name="altitude" text="0.0" class="osd-altitude" />
+            <ui:Label text="м" class="osd-altitude-unit" />
+            <ui:Label name="homeDistance" text="ДОМ 0 м" class="osd-home" />
+            <ui:VisualElement class="osd-power">
+                <ui:Label name="throttle" text="ГАЗ 0%" />
+                <ui:Label name="verticalSpeed" text="ПОДЪЁМ +0.0 м/с" />
             </ui:VisualElement>
-            <ui:VisualElement class="divider" />
-            <ui:Label text="ВЫСОТА НАД ЗЕМЛЁЙ" class="eyebrow" />
-            <ui:VisualElement class="reading-row">
-                <ui:Label name="altitude" text="0.0" class="altitude" />
-                <ui:Label text="м" class="unit" />
+            <ui:VisualElement class="osd-movement">
+                <ui:Label name="horizontalSpeed" text="V 0.0 км/ч" />
+                <ui:Label name="groundHeight" text="H 0.0 м" />
             </ui:VisualElement>
-            <ui:Label name="climb" text="0.0 м/с" class="climb" />
+            <ui:VisualElement class="osd-coordinates">
+                <ui:Label name="positionX" text="X 0.0 м" />
+                <ui:Label name="positionZ" text="Z 0.0 м" />
+            </ui:VisualElement>
+            <ui:VisualElement class="osd-attitude">
+                <ui:Label name="dronePitch" text="PITCH 0°" />
+                <ui:Label name="droneRoll" text="ROLL 0°" />
+            </ui:VisualElement>
         </ui:VisualElement>
-        <ui:VisualElement class="telemetry-right">
-            <ui:Label text="ГАЗ" class="eyebrow" />
-            <ui:VisualElement class="throttle-track">
-                <ui:VisualElement name="throttleFill" class="throttle-fill" />
-                <ui:VisualElement class="hover-mark" />
+        <ui:VisualElement name="crosshair" class="crosshair">
+            <ui:VisualElement class="crosshair-left" />
+            <ui:VisualElement class="crosshair-right" />
+            <ui:VisualElement class="crosshair-top" />
+            <ui:VisualElement class="crosshair-bottom" />
+        </ui:VisualElement>
+        <ui:VisualElement name="humanHealth" class="human-health">
+            <ui:Label name="healthTitle" text="Здоровье игрока" class="health-title small" />
+            <ui:VisualElement class="health-heading health-main">
+                <ui:VisualElement class="health-plus">
+                    <ui:VisualElement class="plus-horizontal" />
+                    <ui:VisualElement class="plus-vertical" />
+                </ui:VisualElement>
+                <ui:Label name="healthValue" text="100" class="health-value" />
             </ui:VisualElement>
-            <ui:Label name="throttle" text="42%" class="throttle-reading" />
-            <ui:Label text="SPACE ↑&#10;CTRL ↓" class="throttle-keys" />
+            <ui:VisualElement class="health-track">
+                <ui:VisualElement name="healthFill" class="health-fill" />
+            </ui:VisualElement>
+            <ui:VisualElement class="health-heading">
+                <ui:Label name="healthStatus" text="" class="small muted" />
+                <ui:Label name="healthHit" text="" class="health-hit" />
+            </ui:VisualElement>
         </ui:VisualElement>
         <ui:VisualElement class="warning-wrap">
-            <ui:Label name="warning" text="" class="warning" />
-        </ui:VisualElement>
-        <ui:VisualElement class="bottom-bar">
-            <ui:VisualElement class="bottom-heading">
-                <ui:Label name="home" text="HOME  0 м" class="home" />
-                <ui:Label text="H — подсказки" class="muted" />
-            </ui:VisualElement>
-            <ui:VisualElement name="help" class="help">
-                <ui:Label text="W/S  тангаж     A/D  крен     МЫШЬ ↔  поворот дрона     МЫШЬ ↕  камера     C  камера вперёд" />
-                <ui:Label text="SPACE/CTRL  вверх / вниз     V  ANGLE / ACRO     B  моторы     F  подрыв     TAB  человек     R  сброс" />
-                <ui:Label text="ANGLE: отпусти Space/Ctrl — удержание высоты. Обратный наклон тормозит разгон." class="help-note" />
+            <ui:VisualElement name="warningPanel" class="warning-panel">
+                <ui:Label name="warning" text="" class="warning" />
             </ui:VisualElement>
         </ui:VisualElement>
-    </ui:VisualElement>
-    <ui:VisualElement name="pilotHint" class="pilot-hint" picking-mode="Ignore">
-        <ui:Label text="FALCON / FPV" class="hint-brand" />
-        <ui:Label name="hint" text="TAB — FPV дрон" />
+        <ui:VisualElement name="hintWrap" class="hint-wrap">
+            <ui:VisualElement name="hintPanel" class="hint-panel">
+                <ui:Label name="helpKey" text="H" class="keycap" />
+                <ui:Label name="hint" text="Найди укрытие. H — управление" class="hint" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:Label name="help" text="" class="help" />
+        <ui:VisualElement name="damageFlash" class="damage-flash" />
+        <ui:VisualElement name="roundResult" class="result-overlay">
+            <ui:VisualElement class="result-panel">
+                <ui:Label name="resultTitle" text="Раунд завершён" class="result-title" />
+                <ui:Label name="resultReason" text="" class="result-reason" />
+                <ui:Button name="restartRound" text="Ещё раунд" class="restart-button" />
+                <ui:Label text="или нажми R" class="result-key small muted" />
+            </ui:VisualElement>
+        </ui:VisualElement>
     </ui:VisualElement>
 </ui:UXML>

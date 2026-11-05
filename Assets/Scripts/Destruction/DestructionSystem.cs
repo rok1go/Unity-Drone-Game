@@ -12,6 +12,7 @@ public struct ExplosionDamage
     public bool enableDebrisCleanup;
     public PhysicsMaterial contactMaterial;
     public float impactFractureSpeed;
+    public float humanDamage;
 }
 
 public static class DestructionSystem
@@ -128,6 +129,7 @@ public static class DestructionSystem
     {
         if (!Application.isPlaying || damage.radius <= 0) return 0;
         using var sample = ExplosionMarker.Auto();
+        var humanDamage = HumanExplosionDamage.Capture(damage, ignoreBody);
         Collider[] hits = Physics.OverlapSphere(damage.position, damage.radius, ~0, QueryTriggerInteraction.Ignore);
         var candidates = new Dictionary<DestructibleBlock, float>();
         foreach (var hit in hits)
@@ -176,6 +178,7 @@ public static class DestructionSystem
             if (target.isKinematic) continue;
             target.AddExplosionForce(damage.impulse,damage.position,damage.radius,0.6f,ForceMode.Impulse);
         }
+        humanDamage.Apply();
         return ids.Count;
     }
 }

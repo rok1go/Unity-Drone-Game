@@ -18,15 +18,24 @@ public class HumanController : MonoBehaviour
     [Header("Physical movement")]
     [Min(0.1f)] public float movementAcceleration = 25f;
     [Range(0, 1)] public float airControl = 0.25f;
+    [Header("Health")]
+    [Min(1f)] public float maxHealth = 100f;
+    public float Health { get; private set; }
+    public float LastDamage { get; private set; }
+    public float LastDamageTime { get; private set; } = float.NegativeInfinity;
     public bool IsControlled { get; private set; }
     public bool IsCrouching { get; private set; }
     public bool IsGrounded { get; private set; }
+    public bool IsEliminated { get; private set; }
+    public event System.Action<HumanController> Eliminated;
     public float CurrentHeight => capsule != null ? capsule.height : standingHeight;
     private Rigidbody body;
     private CapsuleCollider capsule;
     private Vector2 moveInput;
     private bool sprintInput, crouchInput, jumpRequested;
     private float pitch, yaw;
+    private Vector3 spawnPosition;
+    private Quaternion spawnRotation;
     private readonly Collider[] headroomHits = new Collider[16];
     private readonly RaycastHit[] groundHits = new RaycastHit[16];
 
@@ -36,18 +45,70 @@ public class HumanController : MonoBehaviour
         body.isKinematic = false; body.useGravity = true;
         body.constraints = RigidbodyConstraints.FreezeRotation;
         yaw = body.rotation.eulerAngles.y;
+        spawnPosition = body.position;
+        spawnRotation = body.rotation;
+        RestoreHealth();
     }
 
     public void SetControlled(bool controlled)
     {
-        IsControlled = controlled;
+        IsControlled = controlled && !IsEliminated;
         moveInput = Vector2.zero; sprintInput = false; jumpRequested = false;
         // Keep the current stance when parked, so switching under a low ceiling is safe.
         crouchInput = IsCrouching;
         if (viewCamera == null) return;
-        viewCamera.enabled = controlled;
+        viewCamera.enabled = IsControlled;
         var listener = viewCamera.GetComponent<AudioListener>();
-        if (listener != null) listener.enabled = controlled;
+        if (listener != null) listener.enabled = IsControlled;
+    }
+
+    public void ApplyDamage(float amount)
+    {
+        if (IsEliminated || amount <= 0f || float.IsNaN(amount) || float.IsInfinity(amount)) return;
+        LastDamage = Mathf.Min(Health, amount);
+        LastDamageTime = Time.unscaledTime;
+        Health = Mathf.Max(0f, Health - amount);
+        if (Health <= 0f) Eliminate();
+    }
+
+    public void RestoreHealth()
+    {
+        if (IsEliminated) return;
+        Health = Mathf.Max(1f, maxHealth);
+        LastDamage = 0f;
+        LastDamageTime = float.NegativeInfinity;
+    }
+
+    public void Eliminate()
+    {
+        if (IsEliminated) return;
+        IsEliminated = true;
+        Health = 0f;
+        SetControlled(false);
+        gameObject.SetActive(false);
+        Eliminated?.Invoke(this);
+    }
+
+    // Local development reset; the round system will own respawns later.
+    public void ResetHuman()
+    {
+        IsEliminated = false;
+        RestoreHealth();
+        body.linearVelocity = Vector3.zero;
+        body.angularVelocity = Vector3.zero;
+        body.position = spawnPosition;
+        body.rotation = spawnRotation;
+        transform.SetPositionAndRotation(spawnPosition, spawnRotation);
+        yaw = spawnRotation.eulerAngles.y;
+        pitch = 0;
+        IsCrouching = false;
+        IsGrounded = false;
+        capsule.height = standingHeight;
+        capsule.center = Vector3.up * standingHeight / 2;
+        if (viewCamera != null) viewCamera.transform.localRotation = Quaternion.identity;
+        SetControlled(false);
+        gameObject.SetActive(true);
+        Physics.SyncTransforms();
     }
 
     private void Update()

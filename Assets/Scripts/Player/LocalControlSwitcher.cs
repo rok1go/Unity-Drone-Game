@@ -8,16 +8,25 @@ public class LocalControlSwitcher : MonoBehaviour
     public bool startAsDrone;
     public ExplosionTestArea testArea;
     public bool ControllingDrone { get; private set; }
+    public bool IsSpectating => human != null && human.IsEliminated;
+    public SpectatorController Spectator { get; private set; }
+    public HideAndSeekRound Round { get; private set; }
 
     private void Start()
     {
+        var spectatorObject = new GameObject("SpectatorCamera");
+        spectatorObject.transform.SetParent(transform, false);
+        Spectator = spectatorObject.AddComponent<SpectatorController>();
         ExplosionCameraShake.Attach(human != null ? human.viewCamera : null);
         ExplosionCameraShake.Attach(drone != null ? drone.viewCamera : null);
         var hud = GetComponent<DroneHud>();
         if (hud == null) hud = gameObject.AddComponent<DroneHud>();
         hud.Initialize(this);
         if (drone != null) drone.Exploded += HandleDroneExploded;
-        SetDroneControl(startAsDrone);
+        if (human != null) human.Eliminated += HandleHumanEliminated;
+        Round = GetComponent<HideAndSeekRound>();
+        if (Round == null) Round = gameObject.AddComponent<HideAndSeekRound>();
+        Round.Initialize(this);
         SetCursor(true);
     }
 
@@ -25,21 +34,37 @@ public class LocalControlSwitcher : MonoBehaviour
     {
         var keyboard = Keyboard.current;
         if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame) SetCursor(false);
-        if (Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) SetCursor(true);
+        bool finished = Round != null && Round.Phase == HideAndSeekRound.RoundPhase.Finished;
+        if (!finished && Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) SetCursor(true);
         if (keyboard != null && keyboard.rKey.wasPressedThisFrame)
         {
-            drone.ResetDrone();
-            if (testArea != null) testArea.ResetCrates();
-            SetDroneControl(true);
+            if (finished) Round.RestartRound();
+            else if (Round != null && Round.CanControlDrone && !IsSpectating && drone != null && drone.IsDestroyed)
+            {
+                drone.ResetDrone();
+                SetDroneControl(true);
+            }
         }
+        if (finished) return;
         if (keyboard != null && keyboard.tabKey.wasPressedThisFrame)
-            SetDroneControl(!ControllingDrone);
+        {
+            if (IsSpectating) Spectator.CycleTarget();
+            else SetDroneControl(!ControllingDrone);
+        }
     }
 
     public void SetDroneControl(bool useDrone)
     {
         if (human == null || drone == null) return;
-        useDrone = useDrone && !drone.IsDestroyed && drone.gameObject.activeInHierarchy;
+        if (Round != null && Round.Phase == HideAndSeekRound.RoundPhase.Finished) return;
+        if (IsSpectating)
+        {
+            EnterSpectator();
+            return;
+        }
+        Spectator.StopObserving();
+        useDrone = useDrone && (Round == null || Round.CanControlDrone) &&
+            !drone.IsDestroyed && drone.gameObject.activeInHierarchy;
         ControllingDrone = useDrone;
         human.SetControlled(!useDrone);
         drone.SetControlled(useDrone);
@@ -47,9 +72,30 @@ public class LocalControlSwitcher : MonoBehaviour
 
     private void HandleDroneExploded() => SetDroneControl(false);
 
+    private void HandleHumanEliminated(HumanController eliminated) => EnterSpectator();
+
+    private void EnterSpectator()
+    {
+        ControllingDrone = false;
+        if (human != null) human.SetControlled(false);
+        if (drone != null) drone.SetControlled(false);
+        if (!Spectator.enabled) Spectator.Begin(human != null ? human.viewCamera : null);
+    }
+
+    public void ShowRoundResult()
+    {
+        Camera source = ControllingDrone && drone != null ? drone.viewCamera : human != null ? human.viewCamera : null;
+        ControllingDrone = false;
+        if (human != null) human.SetControlled(false);
+        if (drone != null) drone.SetFlightLocked(true);
+        if (!Spectator.enabled) Spectator.Begin(source);
+        SetCursor(false);
+    }
+
     private void OnDestroy()
     {
         if (drone != null) drone.Exploded -= HandleDroneExploded;
+        if (human != null) human.Eliminated -= HandleHumanEliminated;
     }
 
     private static void SetCursor(bool locked)
