@@ -17,6 +17,8 @@
 .role-body { position: absolute; left: 1px; top: 12px; width: 15px; height: 7px; border-top-left-radius: 7px; border-top-right-radius: 7px; background-color: rgb(247, 249, 250); }
 .alive-panel { min-width: 205px; height: 36px; padding: 0 13px; justify-content: center; }
 .alive-count { font-size: 18px; -unity-text-align: middle-right; }
+.alive-panel.match-stock { height: 56px; }
+.stock-count { display: none; -unity-text-align: middle-right; color: rgb(216, 230, 231); }
 .clock-group { position: absolute; left: 32%; right: 32%; top: 0; flex-direction: row; align-items: center; }
 .clock-rule { flex-grow: 1; height: 1px; margin-left: 14px; margin-right: 14px; background-color: rgba(238, 244, 249, 0.65); }
 .round-clock { width: 168px; flex-shrink: 0; align-items: center; padding: 12px 10px 8px; }

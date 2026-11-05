@@ -4,6 +4,7 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(Camera), typeof(AudioListener))]
 public class SpectatorController : MonoBehaviour
 {
+    public bool AllowFreeCamera { get; set; } = true;
     public HumanController ObservedHuman { get; private set; }
     public bool IsFollowing => ObservedHuman != null && !ObservedHuman.IsEliminated &&
         ObservedHuman.gameObject.activeInHierarchy;
@@ -51,6 +52,7 @@ public class SpectatorController : MonoBehaviour
         for (int i = 1; i <= humans.Length; i++)
         {
             var candidate = humans[(previous + i) % humans.Length];
+            if (MultiplayerPrototype.OnlineMatch && !MultiplayerPrototype.Instance.CanObserve(candidate)) continue;
             if (candidate.IsEliminated || candidate.viewCamera == null) continue;
             ObservedHuman = candidate;
             break;
@@ -66,7 +68,7 @@ public class SpectatorController : MonoBehaviour
     private void Update()
     {
         if (followingHuman && !IsFollowing) CycleTarget();
-        if (IsFollowing || Cursor.lockState != CursorLockMode.Locked) return;
+        if (IsFollowing || !AllowFreeCamera || Cursor.lockState != CursorLockMode.Locked) return;
         Vector2 look = Mouse.current != null ? Mouse.current.delta.ReadValue() : Vector2.zero;
         yaw += look.x * 0.12f;
         pitch = Mathf.Clamp(pitch - look.y * 0.12f, -85f, 85f);

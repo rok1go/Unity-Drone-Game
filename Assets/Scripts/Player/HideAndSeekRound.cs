@@ -13,11 +13,13 @@ public class HideAndSeekRound : MonoBehaviour
     public bool IsRestarting { get; private set; }
     public bool CanControlDrone => initialized && Phase == RoundPhase.Hunting;
     public float RemainingSeconds => Phase == RoundPhase.Finished ? 0f : Mathf.Max(0f, phaseEndsAt - Time.time);
-    public int TotalHumans => humans.Count;
+    public int TotalHumans => networkDriven ? networkTotal : humans.Count;
+    public bool CanRestart => !networkDriven || (MultiplayerPrototype.Instance != null && MultiplayerPrototype.Instance.IsHost);
     public int AliveHumans
     {
         get
         {
+            if (networkDriven) return networkAlive;
             int count = 0;
             foreach (var human in humans)
                 if (human != null && !human.IsEliminated) count++;
@@ -29,6 +31,21 @@ public class HideAndSeekRound : MonoBehaviour
     private LocalControlSwitcher controls;
     private float phaseEndsAt;
     private bool initialized;
+    private bool networkDriven;
+    private int networkTotal, networkAlive;
+
+    public void InitializeNetwork(LocalControlSwitcher switcher)
+    {
+        controls = switcher; networkDriven = true; initialized = true;
+    }
+
+    public void ApplyNetworkState(RoundPhase phase, bool dronesWon, float remaining, int total, int alive)
+    {
+        bool finishedNow = phase == RoundPhase.Finished && Phase != RoundPhase.Finished;
+        Phase = phase; DronesWon = dronesWon; phaseEndsAt = Time.time + remaining;
+        networkTotal = total; networkAlive = alive;
+        if (finishedNow) controls.ShowRoundResult();
+    }
 
     public void Initialize(LocalControlSwitcher switcher)
     {
@@ -45,7 +62,7 @@ public class HideAndSeekRound : MonoBehaviour
 
     private void Update()
     {
-        if (!initialized || Phase == RoundPhase.Finished) return;
+        if (!initialized || networkDriven || Phase == RoundPhase.Finished) return;
         if (humans.Count > 0 && AliveHumans == 0)
         {
             Finish(true);
@@ -74,6 +91,7 @@ public class HideAndSeekRound : MonoBehaviour
 
     public void RestartRound()
     {
+        if (networkDriven) { MultiplayerPrototype.Instance.RestartOnlineRound(); return; }
         if (Phase != RoundPhase.Finished || IsRestarting) return;
         IsRestarting = true;
         // Reload the authored scene to restore every wall, prop, spawn and health value.

@@ -10,6 +10,7 @@
             </ui:VisualElement>
             <ui:VisualElement name="alivePanel" class="alive-panel">
                 <ui:Label name="aliveCount" text="В живых: 1 / 1" class="alive-count" />
+                <ui:Label name="droneStock" text="Дроны: 3" class="small stock-count" />
             </ui:VisualElement>
         </ui:VisualElement>
         <ui:VisualElement class="clock-group">
@@ -89,7 +90,7 @@
                 <ui:Label name="resultTitle" text="Раунд завершён" class="result-title" />
                 <ui:Label name="resultReason" text="" class="result-reason" />
                 <ui:Button name="restartRound" text="Ещё раунд" class="restart-button" />
-                <ui:Label text="или нажми R" class="result-key small muted" />
+                <ui:Label name="resultKey" text="или нажми R" class="result-key small muted" />
             </ui:VisualElement>
         </ui:VisualElement>
     </ui:VisualElement>

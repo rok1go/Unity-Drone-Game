@@ -51,6 +51,11 @@ public sealed class HudGlassPanel : VisualElement
     private static void RoundedPath(Painter2D p, float x, float y, float w, float h, float radius)
     {
         float r = Mathf.Min(radius, Mathf.Min(w, h) * 0.5f);
+        if (r <= 0.01f)
+        {
+            p.MoveTo(new Vector2(x, y)); p.LineTo(new Vector2(x + w, y));
+            p.LineTo(new Vector2(x + w, y + h)); p.LineTo(new Vector2(x, y + h)); p.ClosePath(); return;
+        }
         p.MoveTo(new Vector2(x + r, y)); p.LineTo(new Vector2(x + w - r, y));
         p.ArcTo(new Vector2(x + w, y), new Vector2(x + w, y + r), r);
         p.LineTo(new Vector2(x + w, y + h - r));

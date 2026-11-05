@@ -58,6 +58,8 @@ public class DroneController : MonoBehaviour
     [Range(0.3f, 4f)] public float explosionEffectDuration = 1.4f;
     [Range(16, 512)] public int explosionParticleCount = 160;
     public bool IsControlled { get; private set; }
+    public bool IsNetworkReplica { get; set; }
+    private bool authoritativeDetonation;
     public bool IsFlightLocked { get; private set; }
     public bool IsArmed { get; private set; }
     public bool IsDestroyed { get; private set; }
@@ -124,6 +126,7 @@ public class DroneController : MonoBehaviour
 
     private void Update()
     {
+        if (IsNetworkReplica) return;
         pitchInput = rollInput = yawInput = verticalInput = 0;
         mouseYawRate = 0;
         if (MotorsArmed && !IsDestroyed) FlightSeconds += Time.deltaTime;
@@ -195,8 +198,8 @@ public class DroneController : MonoBehaviour
         }
         else
         {
-            body.isKinematic = false;
-            body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+            body.isKinematic = IsNetworkReplica;
+            body.collisionDetectionMode = IsNetworkReplica ? CollisionDetectionMode.ContinuousSpeculative : CollisionDetectionMode.ContinuousDynamic;
         }
         IsFlightLocked = locked;
     }
@@ -232,7 +235,7 @@ public class DroneController : MonoBehaviour
 
     private void FixedUpdate()
     {
-        if (IsDestroyed || IsFlightLocked) return;
+        if (IsDestroyed || IsFlightLocked || IsNetworkReplica) return;
         // Passive air resistance also applies with the motors off.
         body.AddForce(-body.linearVelocity * body.linearVelocity.magnitude * airDrag, ForceMode.Acceleration);
         if (!MotorsArmed) return;
@@ -316,7 +319,7 @@ public class DroneController : MonoBehaviour
 
     private void OnCollisionEnter(Collision collision)
     {
-        if (IsDestroyed || IsFlightLocked) return;
+        if (IsDestroyed || IsFlightLocked || IsNetworkReplica) return;
         // Require both fast travel and a meaningful hit into the surface, rather than a scrape.
         if (collision.relativeVelocity.sqrMagnitude < impactDetonationSpeed * impactDetonationSpeed) return;
         for (int i = 0; i < collision.contactCount; i++)
@@ -331,6 +334,8 @@ public class DroneController : MonoBehaviour
     private void Detonate()
     {
         if (IsDestroyed) return;
+        if (!authoritativeDetonation && MultiplayerPrototype.Instance != null &&
+            MultiplayerPrototype.Instance.InterceptDetonation(this)) return;
         // Latch before applying damage: one collision can report several contacts.
         IsDestroyed = true;
         IsArmed = false;
@@ -347,6 +352,30 @@ public class DroneController : MonoBehaviour
         SetControlled(false);
         gameObject.SetActive(false);
         Exploded?.Invoke();
+        if (MultiplayerPrototype.Instance != null) MultiplayerPrototype.Instance.DroneExploded(this);
+    }
+
+    public void DetonateAuthoritatively()
+    {
+        authoritativeDetonation = true;
+        try { Detonate(); }
+        finally { authoritativeDetonation = false; }
+    }
+
+    public void ApplyNetworkDestroyed(bool effect)
+    {
+        if (IsDestroyed) return;
+        IsDestroyed = true; IsArmed = false;
+        if (effect) DroneExplosionEffect.Play(transform.position, explosionMaterial, explosionRadius,
+            explosionEffectDuration, explosionParticleCount, explosionImpulse / 21f);
+        SetControlled(false); gameObject.SetActive(false); Exploded?.Invoke();
+    }
+
+    public void ApplyRemoteTelemetry(float throttle, float seconds, bool motors, int mode)
+    {
+        if (!IsNetworkReplica) return;
+        Throttle = Mathf.Clamp01(throttle); FlightSeconds = Mathf.Max(0f, seconds);
+        MotorsArmed = motors; flightMode = (FlightMode)Mathf.Clamp(mode, 0, 1);
     }
 
     public void ResetDrone()
@@ -356,9 +385,12 @@ public class DroneController : MonoBehaviour
         IsDestroyed = false; IsArmed = false;
         FlightSeconds = 0;
         SetControlled(false);
+        bool parked = body.isKinematic;
+        if (parked) body.isKinematic = false;
         body.linearVelocity = Vector3.zero; body.angularVelocity = Vector3.zero;
         body.position = spawnPosition; body.rotation = spawnRotation;
         transform.SetPositionAndRotation(spawnPosition, spawnRotation);
+        body.isKinematic = parked;
         CenterCamera();
         gameObject.SetActive(true);
         Physics.SyncTransforms();

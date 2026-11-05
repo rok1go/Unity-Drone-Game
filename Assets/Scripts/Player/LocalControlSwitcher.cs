@@ -8,12 +8,17 @@ public class LocalControlSwitcher : MonoBehaviour
     public bool startAsDrone;
     public ExplosionTestArea testArea;
     public bool ControllingDrone { get; private set; }
-    public bool IsSpectating => human != null && human.IsEliminated;
+    public bool IsSpectating => MultiplayerPrototype.OnlineMatch ? MultiplayerPrototype.Instance.LocalDead : human != null && human.IsEliminated;
     public SpectatorController Spectator { get; private set; }
     public HideAndSeekRound Round { get; private set; }
 
     private void Start()
     {
+        if (MultiplayerPrototype.Instance != null && !MultiplayerPrototype.OnlineMatch && !MultiplayerPrototype.Instance.InTraining)
+        {
+            enabled = false;
+            return;
+        }
         var spectatorObject = new GameObject("SpectatorCamera");
         spectatorObject.transform.SetParent(transform, false);
         Spectator = spectatorObject.AddComponent<SpectatorController>();
@@ -26,16 +31,28 @@ public class LocalControlSwitcher : MonoBehaviour
         if (human != null) human.Eliminated += HandleHumanEliminated;
         Round = GetComponent<HideAndSeekRound>();
         if (Round == null) Round = gameObject.AddComponent<HideAndSeekRound>();
-        Round.Initialize(this);
+        if (MultiplayerPrototype.OnlineMatch)
+        {
+            Round.InitializeNetwork(this);
+            MultiplayerPrototype.Instance.AttachLocalControls(this);
+        }
+        else Round.Initialize(this);
         SetCursor(true);
     }
 
     private void Update()
     {
         var keyboard = Keyboard.current;
-        if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame) SetCursor(false);
+        if (MultiplayerPrototype.Instance != null && MultiplayerPrototype.Instance.MenuOpen) return;
+        if (MultiplayerPrototype.Instance == null && keyboard != null && keyboard.escapeKey.wasPressedThisFrame) SetCursor(false);
         bool finished = Round != null && Round.Phase == HideAndSeekRound.RoundPhase.Finished;
         if (!finished && Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) SetCursor(true);
+        if (MultiplayerPrototype.OnlineMatch)
+        {
+            if (finished && keyboard != null && keyboard.rKey.wasPressedThisFrame) MultiplayerPrototype.Instance.RestartOnlineRound();
+            if (!finished && IsSpectating && keyboard != null && keyboard.tabKey.wasPressedThisFrame) Spectator.CycleTarget();
+            return;
+        }
         if (keyboard != null && keyboard.rKey.wasPressedThisFrame)
         {
             if (finished) Round.RestartRound();
@@ -55,6 +72,7 @@ public class LocalControlSwitcher : MonoBehaviour
 
     public void SetDroneControl(bool useDrone)
     {
+        if (MultiplayerPrototype.OnlineMatch) { MultiplayerPrototype.Instance.RefreshLocalControl(); return; }
         if (human == null || drone == null) return;
         if (Round != null && Round.Phase == HideAndSeekRound.RoundPhase.Finished) return;
         if (IsSpectating)
@@ -76,10 +94,21 @@ public class LocalControlSwitcher : MonoBehaviour
 
     private void EnterSpectator()
     {
+        if (MultiplayerPrototype.OnlineMatch) { MultiplayerPrototype.Instance.RefreshLocalControl(true); return; }
         ControllingDrone = false;
         if (human != null) human.SetControlled(false);
         if (drone != null) drone.SetControlled(false);
         if (!Spectator.enabled) Spectator.Begin(human != null ? human.viewCamera : null);
+    }
+
+    public void ApplyNetworkControl(bool droneRole, bool active)
+    {
+        ControllingDrone = droneRole && !MultiplayerPrototype.Instance.LocalDead;
+        human.SetControlled(active && !droneRole);
+        drone.SetControlled(active && droneRole);
+        Spectator.AllowFreeCamera = false;
+        if (active) Spectator.StopObserving();
+        else if (!Spectator.enabled) Spectator.Begin(droneRole ? drone.viewCamera : human.viewCamera);
     }
 
     public void ShowRoundResult()

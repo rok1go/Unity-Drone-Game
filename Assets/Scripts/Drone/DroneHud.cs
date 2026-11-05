@@ -19,6 +19,7 @@ public class DroneHud : MonoBehaviour
     private Label role, phase, roundTimer, aliveCount, speed, altitude, throttle, flightMode, warning, hint, help;
     private Label healthTitle, healthValue, healthStatus, healthHit, resultTitle, resultReason;
     private Button restartButton;
+    private Label stockLabel, resultKey;
     private readonly RaycastHit[] groundHits = new RaycastHit[16];
     private bool showHelp;
     private float nextRefresh;
@@ -83,6 +84,7 @@ public class DroneHud : MonoBehaviour
         role = root.Q<Label>("playerRole"); phase = root.Q<Label>("roundPhase");
         hintWrap = root.Q("hintWrap"); roleIcon = root.Q("roleIcon"); helpKey = root.Q<Label>("helpKey");
         roundTimer = root.Q<Label>("roundTimer"); aliveCount = root.Q<Label>("aliveCount");
+        stockLabel = root.Q<Label>("droneStock"); resultKey = root.Q<Label>("resultKey");
         speed = root.Q<Label>("speed"); altitude = root.Q<Label>("altitude");
         throttle = root.Q<Label>("throttle"); flightMode = root.Q<Label>("flightMode");
         warning = root.Q<Label>("warning"); hint = root.Q<Label>("hint"); help = root.Q<Label>("help");
@@ -110,7 +112,8 @@ public class DroneHud : MonoBehaviour
         var round = controls.Round;
         bool finished = round != null && round.Phase == HideAndSeekRound.RoundPhase.Finished;
         var drone = controls.drone;
-        bool flying = !finished && controls.ControllingDrone && drone != null && drone.IsControlled && !drone.IsDestroyed;
+        bool onlineDrone = MultiplayerPrototype.OnlineMatch && MultiplayerPrototype.Instance.LocalIsDrone;
+        bool flying = !finished && controls.ControllingDrone && drone != null && (drone.IsControlled || onlineDrone) && !drone.IsDestroyed;
         if (flying) flightDisplay.UpdateTelemetry(drone, cachedGround);
         osd.style.display = flying ? DisplayStyle.Flex : DisplayStyle.None;
         bool aiming = !finished && !controls.IsSpectating &&
@@ -121,7 +124,11 @@ public class DroneHud : MonoBehaviour
         roleIcon.style.display = !flying && !controls.IsSpectating ? DisplayStyle.Flex : DisplayStyle.None;
         helpKey.style.display = !controls.IsSpectating && round != null &&
             round.Phase == HideAndSeekRound.RoundPhase.Hiding ? DisplayStyle.Flex : DisplayStyle.None;
-        UpdateHumanHealth(!finished && !flying);
+        UpdateHumanHealth(!finished && !flying && !onlineDrone);
+        bool online = MultiplayerPrototype.OnlineMatch;
+        stockLabel.style.display = online ? DisplayStyle.Flex : DisplayStyle.None;
+        stockLabel.parent.EnableInClassList("match-stock", online);
+        if (online) stockLabel.text = "Дроны: " + MultiplayerPrototype.Instance.State.DroneStock;
         if (Keyboard.current != null && Keyboard.current.hKey.wasPressedThisFrame) showHelp = !showHelp;
         help.style.display = showHelp && !finished ? DisplayStyle.Flex : DisplayStyle.None;
         if (Time.unscaledTime < nextRefresh) return;
@@ -140,8 +147,10 @@ public class DroneHud : MonoBehaviour
             resultTitle.text = round.DronesWon ? "Дроны победили" : "Люди выжили";
             resultReason.text = round.DronesWon ? "Все люди найдены."
                 : "Время вышло. Выжило " + round.AliveHumans + " из " + round.TotalHumans + ".";
-            restartButton.text = round.IsRestarting ? "Загрузка…" : "Ещё раунд";
-            restartButton.SetEnabled(!round.IsRestarting);
+            if (MultiplayerPrototype.OnlineMatch) resultReason.text = MultiplayerPrototype.Instance.State.ResultReason;
+            restartButton.text = !round.CanRestart ? "Ждём хоста" : round.IsRestarting ? "Загрузка…" : "Ещё раунд";
+            restartButton.SetEnabled(round.CanRestart && !round.IsRestarting);
+            resultKey.text = round.CanRestart ? "или нажми R" : "Следующий раунд запускает хост";
             warningPanel.style.display = DisplayStyle.None;
             return;
         }
@@ -154,11 +163,23 @@ public class DroneHud : MonoBehaviour
         else
             hint.text = drone != null && drone.IsDestroyed ? "R — новый дрон"
                 : flying ? "F — подрыв    Tab — человек    H — управление" : "Tab — дрон    H — управление";
+        if (online)
+        {
+            if (controls.IsSpectating)
+                hint.text = onlineDrone ? "Дрон потерян. Следующий запуск — автоматически."
+                    : controls.Spectator.IsFollowing ? "Ты выбыл. Tab — следующий игрок" : "Ты выбыл. Ожидай конца раунда.";
+            else if (onlineDrone && round.Phase == HideAndSeekRound.RoundPhase.Hiding)
+                hint.text = "Люди прячутся. Ожидай начала поиска.";
+            else if (onlineDrone) hint.text = "F — подрыв    H — управление    Esc — меню";
+            else hint.text = round.Phase == HideAndSeekRound.RoundPhase.Hiding
+                ? "Найди укрытие. H — управление" : "H — управление    Esc — меню";
+        }
         help.text = controls.IsSpectating
             ? "Tab — следующий игрок\nСвободная камера: WASD, Space / Ctrl\nShift — быстрее"
             : flying
                 ? "WASD — наклон\nМышь — поворот и обзор\nSpace / Ctrl — вверх и вниз\nC — камера вперёд\nV — режим полёта   B — моторы\nF — подрыв   Tab — человек"
                 : "WASD — движение\nМышь — обзор\nShift — бег\nCtrl — присесть\nSpace — прыжок";
+        if (online) help.text = help.text.Replace("   Tab — человек", "").Replace("Свободная камера: WASD, Space / Ctrl\nShift — быстрее", "Esc — меню");
         warning.text = "";
         if (flying)
         {

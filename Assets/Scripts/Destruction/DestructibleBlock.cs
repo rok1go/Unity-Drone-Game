@@ -29,6 +29,13 @@ public class DestructibleBlock : MonoBehaviour
         if (contactMaterial != null) GetComponent<Collider>().sharedMaterial = contactMaterial;
         transform.SetParent(chunk, true); // Original geometry and collider become part of the compound body.
     }
+
+    public void HideReplicated()
+    {
+        if (RenderChunk != null) { RenderChunk.Remove(GetComponent<MeshFilter>()); RenderChunk = null; }
+        IsDetached = true;
+        gameObject.SetActive(false);
+    }
     private void OnDestroy()
     {
         if (RenderChunk != null) RenderChunk.Remove(GetComponent<MeshFilter>());

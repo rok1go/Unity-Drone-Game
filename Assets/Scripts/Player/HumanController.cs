@@ -24,6 +24,7 @@ public class HumanController : MonoBehaviour
     public float LastDamage { get; private set; }
     public float LastDamageTime { get; private set; } = float.NegativeInfinity;
     public bool IsControlled { get; private set; }
+    public bool IsNetworkReplica { get; set; }
     public bool IsCrouching { get; private set; }
     public bool IsGrounded { get; private set; }
     public bool IsEliminated { get; private set; }
@@ -69,6 +70,23 @@ public class HumanController : MonoBehaviour
         LastDamageTime = Time.unscaledTime;
         Health = Mathf.Max(0f, Health - amount);
         if (Health <= 0f) Eliminate();
+    }
+
+    public void ApplyNetworkHealth(float health)
+    {
+        if (IsEliminated) return;
+        health = Mathf.Clamp(health, 0f, maxHealth);
+        if (health < Health) { LastDamage = Health - health; LastDamageTime = Time.unscaledTime; }
+        Health = health;
+        if (Health <= 0f) Eliminate();
+    }
+
+    public void ApplyRemoteStance(bool crouching)
+    {
+        if (!IsNetworkReplica) return;
+        IsCrouching = crouching;
+        capsule.height = crouching ? crouchingHeight : standingHeight;
+        capsule.center = Vector3.up * capsule.height / 2f;
     }
 
     public void RestoreHealth()
@@ -130,6 +148,7 @@ public class HumanController : MonoBehaviour
 
     private void FixedUpdate()
     {
+        if (IsNetworkReplica) return;
         bool crouch = crouchInput || (IsCrouching && !CanStand());
         IsCrouching = crouch;
         capsule.height = crouch ? crouchingHeight : standingHeight;

@@ -53,6 +53,7 @@ public sealed class HumanExplosionDamage
     public static HumanExplosionDamage Capture(ExplosionDamage damage, Rigidbody source)
     {
         var result = new HumanExplosionDamage();
+        if (MultiplayerPrototype.OnlineMatch && !MultiplayerPrototype.Instance.IsHost) return result;
         foreach (var human in Object.FindObjectsByType<HumanController>())
         {
             if (human.IsEliminated || !human.TryGetComponent<CapsuleCollider>(out var capsule)) continue;
