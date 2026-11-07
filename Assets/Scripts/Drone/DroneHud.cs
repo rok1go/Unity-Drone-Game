@@ -8,7 +8,7 @@ public class DroneHud : MonoBehaviour
     [SerializeField, HideInInspector] private UIDocument document;
     [SerializeField, HideInInspector] private PanelSettings panel;
     private VisualElement osd, humanHealth, healthFill, damageFlash, crosshair, result;
-    private VisualElement hintWrap, roleIcon;
+    private VisualElement hintWrap, roleIcon, windowPrompt;
     private VisualElement warningPanel;
     private DroneFlightDisplay flightDisplay;
     private Label flightClock, flightState, droneHeading, homeDistance, verticalSpeed, horizontalSpeed,
@@ -81,6 +81,7 @@ public class DroneHud : MonoBehaviour
         osd = root.Q("osd"); humanHealth = root.Q("humanHealth"); healthFill = root.Q("healthFill");
         if (osdFont != null) osd.style.unityFontDefinition = FontDefinition.FromFont(osdFont);
         damageFlash = root.Q("damageFlash"); crosshair = root.Q("crosshair"); result = root.Q("roundResult");
+        windowPrompt = root.Q("windowPrompt");
         role = root.Q<Label>("playerRole"); phase = root.Q<Label>("roundPhase");
         hintWrap = root.Q("hintWrap"); roleIcon = root.Q("roleIcon"); helpKey = root.Q<Label>("helpKey");
         roundTimer = root.Q<Label>("roundTimer"); aliveCount = root.Q<Label>("aliveCount");
@@ -119,6 +120,11 @@ public class DroneHud : MonoBehaviour
         bool aiming = !finished && !controls.IsSpectating &&
             (flying || (controls.human != null && controls.human.IsControlled));
         crosshair.style.display = aiming && !flying ? DisplayStyle.Flex : DisplayStyle.None;
+        var humanView = aiming && !flying && !controls.ControllingDrone ? controls.human.viewCamera : null;
+        bool canBreakWindow = humanView != null && humanView.isActiveAndEnabled &&
+            UnityEngine.Cursor.lockState == CursorLockMode.Locked && MultiplayerPrototype.Instance?.MenuOpen != true &&
+            BreakableWindow.TryGetTarget(new Ray(humanView.transform.position, humanView.transform.forward), out _);
+        windowPrompt.EnableInClassList("is-visible", canBreakWindow);
         result.style.display = finished ? DisplayStyle.Flex : DisplayStyle.None;
         hintWrap.style.display = finished ? DisplayStyle.None : DisplayStyle.Flex;
         roleIcon.style.display = !flying && !controls.IsSpectating ? DisplayStyle.Flex : DisplayStyle.None;
@@ -178,7 +184,7 @@ public class DroneHud : MonoBehaviour
             ? "Tab — следующий игрок\nСвободная камера: WASD, Space / Ctrl\nShift — быстрее"
             : flying
                 ? "WASD — наклон\nМышь — поворот и обзор\nSpace / Ctrl — вверх и вниз\nC — камера вперёд\nV — режим полёта   B — моторы\nF — подрыв   Tab — человек"
-                : "WASD — движение\nМышь — обзор\nShift — бег\nCtrl — присесть\nSpace — прыжок";
+                : "WASD — движение\nМышь — обзор\nShift — бег\nCtrl — присесть\nSpace — прыжок\nE — разбить стекло\nSpace → Ctrl — пролезть в окно";
         if (online) help.text = help.text.Replace("   Tab — человек", "").Replace("Свободная камера: WASD, Space / Ctrl\nShift — быстрее", "Esc — меню");
         warning.text = "";
         if (flying)

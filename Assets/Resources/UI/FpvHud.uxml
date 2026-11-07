@@ -55,6 +55,12 @@
             <ui:VisualElement class="crosshair-top" />
             <ui:VisualElement class="crosshair-bottom" />
         </ui:VisualElement>
+        <ui:VisualElement name="windowPrompt" class="window-prompt-wrap" picking-mode="Ignore">
+            <ui:VisualElement class="window-prompt" picking-mode="Ignore">
+                <ui:Label text="E" class="keycap window-prompt-key" picking-mode="Ignore" />
+                <ui:Label text="Разбить стекло" class="window-prompt-label" picking-mode="Ignore" />
+            </ui:VisualElement>
+        </ui:VisualElement>
         <ui:VisualElement name="humanHealth" class="human-health">
             <ui:Label name="healthTitle" text="Здоровье игрока" class="health-title small" />
             <ui:VisualElement class="health-heading health-main">

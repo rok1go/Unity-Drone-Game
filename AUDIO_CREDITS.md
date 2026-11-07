@@ -28,3 +28,11 @@ https://creativecommons.org/publicdomain/zero/1.0/
 The HQ MP3 previews were decoded using Unity's AudioClip importer into `.audio-work/`.
 `node Tools/prepare-recorded-audio.cjs` rebuilds the two runtime WAV files from those
 decoded source WAV files. No synthetic oscillator or noise layers are added.
+
+## Window glass
+
+The glass break uses the recording supplied with the map task,
+`glass-breaking-sound-effect_wLZSIYn.mp3`. The runtime clip
+`Assets/Resources/Audio/GlassBreak.wav` is a 0.9-second mono excerpt with
+edge fades, low and high frequency filtering, and 3 dB of gain reduction. The game
+uses separate playback levels for interaction and explosions.

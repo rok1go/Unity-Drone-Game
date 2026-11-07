@@ -132,8 +132,22 @@ public static class DestructionSystem
         var humanDamage = HumanExplosionDamage.Capture(damage, ignoreBody);
         Collider[] hits = Physics.OverlapSphere(damage.position, damage.radius, ~0, QueryTriggerInteraction.Ignore);
         var candidates = new Dictionary<DestructibleBlock, float>();
+        BreakableWindow nearestShatteredWindow = null;
+        float nearestWindowDistance = float.PositiveInfinity;
         foreach (var hit in hits)
         {
+            if (hit.TryGetComponent<BreakableWindow>(out var window))
+            {
+                float distance = Vector3.Distance(hit.ClosestPoint(damage.position), damage.position);
+                float strength = 1f - Mathf.Clamp01(distance / damage.radius);
+                float speed = Mathf.Lerp(2.5f, Mathf.Clamp(damage.impulse * 0.3f, 3f, 9f), strength);
+                if (window.Shatter(damage.position, speed, true) && distance < nearestWindowDistance)
+                {
+                    nearestShatteredWindow = window;
+                    nearestWindowDistance = distance;
+                }
+                continue;
+            }
             var block = hit.GetComponent<DestructibleBlock>();
             if (block != null && (!block.IsDetached ||
                 (hit.attachedRigidbody != null &&
@@ -182,6 +196,7 @@ public static class DestructionSystem
             if (target.isKinematic) continue;
             target.AddExplosionForce(damage.impulse,damage.position,damage.radius,0.6f,ForceMode.Impulse);
         }
+        if (nearestShatteredWindow != null) nearestShatteredWindow.PlayBreakSound(true);
         humanDamage.Apply();
         return ids.Count;
     }

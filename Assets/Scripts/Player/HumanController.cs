@@ -34,7 +34,9 @@ public class HumanController : MonoBehaviour
     private Rigidbody body;
     private CapsuleCollider capsule;
     private Vector2 moveInput;
-    private bool sprintInput, crouchInput, jumpRequested;
+    private bool sprintInput, crouchInput, jumpRequested, jumped;
+    private Vector3 windowTravelDirection;
+    private float windowTravelEnd;
     private float pitch, yaw, stepCameraOffset;
     private Vector3 spawnPosition;
     private Quaternion spawnRotation;
@@ -56,6 +58,8 @@ public class HumanController : MonoBehaviour
     {
         IsControlled = controlled && !IsEliminated;
         moveInput = Vector2.zero; sprintInput = false; jumpRequested = false;
+        jumped = false;
+        windowTravelDirection = Vector3.zero;
         // Keep the current stance when parked, so switching under a low ceiling is safe.
         crouchInput = IsCrouching;
         if (viewCamera == null) return;
@@ -152,7 +156,12 @@ public class HumanController : MonoBehaviour
         Vector2 look = Mouse.current != null ? Mouse.current.delta.ReadValue() : Vector2.zero;
         yaw += look.x * mouseSensitivity;
         pitch = Mathf.Clamp(pitch - look.y * mouseSensitivity, -85, 85);
-        if (viewCamera != null) viewCamera.transform.localRotation = Quaternion.Euler(pitch, 0, 0);
+        if (viewCamera != null)
+        {
+            viewCamera.transform.localRotation = Quaternion.Euler(pitch, 0, 0);
+            if (keyboard.eKey.wasPressedThisFrame)
+                BreakableWindow.TryInteract(new Ray(viewCamera.transform.position, viewCamera.transform.forward));
+        }
     }
 
     private void FixedUpdate()
@@ -180,6 +189,14 @@ public class HumanController : MonoBehaviour
         Vector3 supportVelocity = support != null ? support.GetPointVelocity(supportPoint) : Vector3.zero;
         float speed = crouch ? crouchSpeed : sprintInput ? sprintSpeed : walkSpeed;
         Vector3 desired = heading * new Vector3(moveInput.x, 0, moveInput.y) * speed;
+        if (IsGrounded && body.linearVelocity.y <= 0f && windowTravelDirection == Vector3.zero)
+            jumped = false;
+        if (IsControlled && crouchInput && jumped && TryTraverseWindow(desired))
+        {
+            jumpRequested = false;
+            return;
+        }
+        windowTravelDirection = Vector3.zero;
         if (IsControlled && IsGrounded && !jumpRequested && stepHeight > 0f && desired.sqrMagnitude > 0.001f)
             TryStepUp(desired);
         // Relative ground movement follows a dynamic platform without braking it to world zero.
@@ -189,6 +206,7 @@ public class HumanController : MonoBehaviour
                 movementAcceleration * (IsGrounded ? 1 : airControl)), ForceMode.Acceleration);
         if (jumpRequested && IsGrounded && !crouch)
         {
+            jumped = true;
             float relativeY = body.linearVelocity.y - supportVelocity.y;
             body.AddForce(Vector3.up * (Mathf.Sqrt(2 * gravity * jumpHeight) - relativeY), ForceMode.VelocityChange);
         }
@@ -232,6 +250,80 @@ public class HumanController : MonoBehaviour
 
         body.position = raisedFeet;
         stepCameraOffset += rise + clearance;
+    }
+
+    private bool TryTraverseWindow(Vector3 movement)
+    {
+        if (movement.sqrMagnitude < 0.001f) return false;
+        Vector3 direction = movement.normalized;
+        if (windowTravelDirection == Vector3.zero && !TryEnterWindow(direction)) return false;
+        if (Vector3.Dot(direction, windowTravelDirection) < 0.25f) return false;
+
+        float remaining = windowTravelEnd - Vector3.Dot(body.position, windowTravelDirection);
+        if (remaining <= 0.025f)
+        {
+            jumped = false;
+            return false;
+        }
+
+        const float passSpeed = 3.5f;
+        float distance = Mathf.Min(passSpeed * Time.fixedDeltaTime, remaining);
+        Vector3 advance = windowTravelDirection * distance;
+        if (!HasWindowTravelClearance(body.position, advance)) return false;
+        body.linearVelocity = advance / Time.fixedDeltaTime;
+        body.AddForce(-Physics.gravity, ForceMode.Acceleration);
+        return true;
+    }
+
+    private bool TryEnterWindow(Vector3 movement)
+    {
+        const float reach = 0.78f;
+        const float maxHeightAdjustment = 0.20f;
+        const float frameMargin = 0.055f;
+        const float exitDistance = 0.64f;
+        Vector3 feet = body.position;
+        foreach (var window in BreakableWindow.BrokenWindows)
+        {
+            Transform pane = window.transform;
+            Vector3 relative = feet - pane.position;
+            float depth = Vector3.Dot(relative, pane.forward);
+            if (Mathf.Abs(depth) > reach) continue;
+            Vector3 direction = depth < 0f ? pane.forward : -pane.forward;
+            if (Vector3.Dot(movement, direction) < 0.55f) continue;
+
+            Vector3 size = pane.lossyScale;
+            if (Mathf.Abs(Vector3.Dot(relative, pane.right)) + capsule.radius + frameMargin > size.x * 0.5f)
+                continue;
+            float minimumY = pane.position.y - size.y * 0.5f + frameMargin;
+            float maximumY = pane.position.y + size.y * 0.5f - capsule.height - frameMargin;
+            if (minimumY > maximumY) continue;
+            Vector3 lift = Vector3.up * (Mathf.Clamp(feet.y, minimumY, maximumY) - feet.y);
+            if (Mathf.Abs(lift.y) > maxHeightAdjustment) continue;
+            Vector3 alignedFeet = feet + lift;
+            Vector3 across = direction * (exitDistance + Mathf.Abs(depth));
+            if (!HasCapsuleClearance(alignedFeet, capsule.height) ||
+                !HasWindowTravelClearance(feet, lift) || !HasWindowTravelClearance(alignedFeet, across))
+                continue;
+
+            // The player supplies the jump and stance. Keep their feet in the opening
+            // while moving across its narrow vertical clearance.
+            body.position = alignedFeet;
+            stepCameraOffset += lift.y;
+            windowTravelDirection = direction;
+            windowTravelEnd = Vector3.Dot(pane.position, direction) + exitDistance;
+            return true;
+        }
+        return false;
+    }
+
+    private bool HasWindowTravelClearance(Vector3 feet, Vector3 displacement)
+    {
+        float distance = displacement.magnitude;
+        if (distance < 0.001f) return true;
+        float radius = capsule.radius;
+        return !Physics.CapsuleCast(feet + Vector3.up * radius,
+            feet + Vector3.up * (capsule.height - radius), radius - 0.01f,
+            displacement / distance, out _, distance, ~0, QueryTriggerInteraction.Ignore);
     }
 
     private bool CanStand() => HasCapsuleClearance(body.position, standingHeight);
