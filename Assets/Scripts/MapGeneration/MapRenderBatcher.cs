@@ -6,6 +6,8 @@ using UnityEngine.Rendering;
 // Preserve individual colliders and destruction while batching nearby static geometry.
 public class MapRenderBatcher : MonoBehaviour
 {
+    public ShadowCastingMode ShadowMode { get; set; } = ShadowCastingMode.On;
+
     private void Start()
     {
         var groups = new Dictionary<(Vector3Int, Material), MapRenderChunk>();
@@ -23,7 +25,7 @@ public class MapRenderBatcher : MonoBehaviour
                 obj.transform.SetParent(transform, false);
                 obj.transform.localPosition = (Vector3)cell * 8f;
                 chunk = obj.AddComponent<MapRenderChunk>();
-                chunk.Initialize(renderer.sharedMaterial);
+                chunk.Initialize(renderer.sharedMaterial, ShadowMode);
                 groups.Add(key, chunk);
             }
             chunk.Add(filter);
@@ -42,13 +44,13 @@ public class MapRenderChunk : MonoBehaviour
     private MeshRenderer chunkRenderer;
     private bool dirty;
 
-    public void Initialize(Material material)
+    public void Initialize(Material material, ShadowCastingMode shadowMode)
     {
         mesh = new Mesh { name = "Map chunk (runtime)", indexFormat = IndexFormat.UInt32 };
         gameObject.AddComponent<MeshFilter>().sharedMesh = mesh;
         chunkRenderer = gameObject.AddComponent<MeshRenderer>();
         chunkRenderer.sharedMaterial = material;
-        chunkRenderer.shadowCastingMode = ShadowCastingMode.On;
+        chunkRenderer.shadowCastingMode = shadowMode;
         chunkRenderer.receiveShadows = true;
     }
 

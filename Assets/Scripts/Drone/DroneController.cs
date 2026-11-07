@@ -378,6 +378,13 @@ public class DroneController : MonoBehaviour
         MotorsArmed = motors; flightMode = (FlightMode)Mathf.Clamp(mode, 0, 1);
     }
 
+    public void SetTrainingSpawn(Vector3 position, Quaternion rotation)
+    {
+        spawnPosition = position;
+        spawnRotation = rotation;
+        ResetDrone();
+    }
+
     public void ResetDrone()
     {
         StopAllCoroutines();

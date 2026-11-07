@@ -26,7 +26,8 @@ public class DestructibleBlock : MonoBehaviour
             GetComponent<MeshRenderer>().enabled = true;
         }
         IsDetached = true;
-        if (contactMaterial != null) GetComponent<Collider>().sharedMaterial = contactMaterial;
+        if (contactMaterial != null)
+            foreach (var collider in GetComponents<Collider>()) collider.sharedMaterial = contactMaterial;
         transform.SetParent(chunk, true); // Original geometry and collider become part of the compound body.
     }
 

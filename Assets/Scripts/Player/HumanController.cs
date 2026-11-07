@@ -18,6 +18,7 @@ public class HumanController : MonoBehaviour
     [Header("Physical movement")]
     [Min(0.1f)] public float movementAcceleration = 25f;
     [Range(0, 1)] public float airControl = 0.25f;
+    [Range(0f, 0.4f)] public float stepHeight = 0.35f;
     [Header("Health")]
     [Min(1f)] public float maxHealth = 100f;
     public float Health { get; private set; }
@@ -34,7 +35,7 @@ public class HumanController : MonoBehaviour
     private CapsuleCollider capsule;
     private Vector2 moveInput;
     private bool sprintInput, crouchInput, jumpRequested;
-    private float pitch, yaw;
+    private float pitch, yaw, stepCameraOffset;
     private Vector3 spawnPosition;
     private Quaternion spawnRotation;
     private readonly Collider[] headroomHits = new Collider[16];
@@ -107,6 +108,13 @@ public class HumanController : MonoBehaviour
         Eliminated?.Invoke(this);
     }
 
+    public void SetTrainingSpawn(Vector3 position, Quaternion rotation)
+    {
+        spawnPosition = position;
+        spawnRotation = rotation;
+        ResetHuman();
+    }
+
     // Local development reset; the round system will own respawns later.
     public void ResetHuman()
     {
@@ -119,6 +127,7 @@ public class HumanController : MonoBehaviour
         transform.SetPositionAndRotation(spawnPosition, spawnRotation);
         yaw = spawnRotation.eulerAngles.y;
         pitch = 0;
+        stepCameraOffset = 0f;
         IsCrouching = false;
         IsGrounded = false;
         capsule.height = standingHeight;
@@ -171,6 +180,8 @@ public class HumanController : MonoBehaviour
         Vector3 supportVelocity = support != null ? support.GetPointVelocity(supportPoint) : Vector3.zero;
         float speed = crouch ? crouchSpeed : sprintInput ? sprintSpeed : walkSpeed;
         Vector3 desired = heading * new Vector3(moveInput.x, 0, moveInput.y) * speed;
+        if (IsControlled && IsGrounded && !jumpRequested && stepHeight > 0f && desired.sqrMagnitude > 0.001f)
+            TryStepUp(desired);
         // Relative ground movement follows a dynamic platform without braking it to world zero.
         Vector3 delta = desired + supportVelocity - body.linearVelocity; delta.y = 0;
         if (IsGrounded || (IsControlled && moveInput.sqrMagnitude > 0))
@@ -188,14 +199,48 @@ public class HumanController : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (viewCamera != null) viewCamera.transform.localPosition = Vector3.up * (CurrentHeight - 0.18f);
+        stepCameraOffset *= Mathf.Exp(-22f * Time.deltaTime);
+        if (viewCamera != null)
+            viewCamera.transform.localPosition = Vector3.up * (CurrentHeight - 0.18f - stepCameraOffset);
     }
 
-    private bool CanStand()
+    private void TryStepUp(Vector3 movement)
+    {
+        const float clearance = 0.02f;
+        Vector3 direction = movement.normalized;
+        Vector3 feet = body.position;
+        float reach = capsule.radius + movement.magnitude * Time.fixedDeltaTime;
+        if (!Physics.Raycast(feet + Vector3.up * 0.06f, direction, out var riser, reach,
+                ~0, QueryTriggerInteraction.Ignore) || riser.normal.y > 0.2f)
+            return;
+
+        Vector3 landing = riser.point + direction * 0.08f;
+        landing.y = feet.y + stepHeight + clearance;
+        if (!Physics.Raycast(landing, Vector3.down, out var top, stepHeight, ~0, QueryTriggerInteraction.Ignore) ||
+            top.normal.y < 0.6f)
+            return;
+
+        float rise = top.point.y - feet.y;
+        Vector3 raisedFeet = feet + Vector3.up * (rise + clearance);
+        if (!HasCapsuleClearance(raisedFeet, capsule.height)) return;
+
+        float radius = capsule.radius;
+        if (Physics.CapsuleCast(raisedFeet + Vector3.up * radius,
+                raisedFeet + Vector3.up * (capsule.height - radius), radius - 0.01f,
+                direction, out _, movement.magnitude * Time.fixedDeltaTime, ~0, QueryTriggerInteraction.Ignore))
+            return;
+
+        body.position = raisedFeet;
+        stepCameraOffset += rise + clearance;
+    }
+
+    private bool CanStand() => HasCapsuleClearance(body.position, standingHeight);
+
+    private bool HasCapsuleClearance(Vector3 feet, float height)
     {
         float radius = capsule.radius;
-        int count = Physics.OverlapCapsuleNonAlloc(body.position + Vector3.up * radius,
-            body.position + Vector3.up * (standingHeight - radius), radius - 0.01f,
+        int count = Physics.OverlapCapsuleNonAlloc(feet + Vector3.up * radius,
+            feet + Vector3.up * (height - radius), radius - 0.01f,
             headroomHits, ~0, QueryTriggerInteraction.Ignore);
         if (count == headroomHits.Length) return false;
         for (int i = 0; i < count; i++)

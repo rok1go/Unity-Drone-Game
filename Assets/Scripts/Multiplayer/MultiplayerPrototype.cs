@@ -38,6 +38,11 @@ public class MultiplayerPrototype : MonoBehaviour
     private GameObject humanTemplate, droneTemplate;
     private Camera menuCamera;
     private string scenePath;
+    public ProceduralMapGenerator TrainingGenerator { get; private set; }
+    private bool suburbanTraining;
+    private int trainingSeed, trainingBuildingCount;
+    private Vector2 trainingMapSize;
+    private bool trainingRoofs;
     private PrototypeLobbySettings settings = new PrototypeLobbySettings();
     private readonly Dictionary<ulong, PrototypeMember> members = new Dictionary<ulong, PrototypeMember>();
     private readonly Dictionary<ulong, PrototypeNetworkActor> actors = new Dictionary<ulong, PrototypeNetworkActor>();
@@ -121,6 +126,7 @@ public class MultiplayerPrototype : MonoBehaviour
         sceneRig = FindObjectsByType<LocalControlSwitcher>().FirstOrDefault(r => r.gameObject.scene == scene);
         if (sceneRig == null) return;
         scenePath = scene.path;
+        TrainingGenerator = FindObjectsByType<ProceduralMapGenerator>().FirstOrDefault(g => g.gameObject.scene == scene);
         sceneRig.enabled = false;
         humanTemplate = sceneRig.human.gameObject; droneTemplate = sceneRig.drone.gameObject;
         sceneRig.human.SetControlled(false); sceneRig.drone.SetControlled(false);
@@ -138,9 +144,8 @@ public class MultiplayerPrototype : MonoBehaviour
         sceneLoading = false;
         if (InTraining)
         {
-            humanTemplate.SetActive(true); droneTemplate.SetActive(true);
-            sceneRig.enabled = true; SetMenuCamera(false); menu.Hide(); LockCursor(true);
-            return;
+            StartTraining(suburbanTraining, trainingSeed, trainingMapSize, trainingBuildingCount, trainingRoofs);
+            if (InTraining) return;
         }
         if (waitingForScenes && network != null && network.IsListening)
         {
@@ -651,11 +656,65 @@ public class MultiplayerPrototype : MonoBehaviour
         finally { Busy = false; }
     }
 
-    public void StartTraining()
+    public void StartTraining(bool suburban, int seed = 0, Vector2 size = default, int buildings = 0, bool roofs = true)
     {
-        if (HasSession || sceneRig == null) return;
-        InTraining = true; humanTemplate.SetActive(true); droneTemplate.SetActive(true);
-        sceneRig.enabled = true; SetMenuCamera(false); menu.Hide(); LockCursor(true);
+        if (HasSession || sceneRig == null || sceneRig.enabled) return;
+        var generator = TrainingGenerator;
+        Vector3 humanSpawn, droneSpawn;
+        Quaternion facing;
+        if (suburban)
+        {
+            if (SuburbanTrainingMap.Create(sceneRig.transform) == null)
+            {
+                InTraining = false;
+                menu.ShowError("Файл карты «Воксельный пригород» отсутствует.");
+                return;
+            }
+            if (generator != null) generator.HideGeneratedMap();
+            if (sceneRig.testArea != null) sceneRig.testArea.gameObject.SetActive(false);
+            humanSpawn = SuburbanTrainingMap.HumanSpawn;
+            droneSpawn = SuburbanTrainingMap.DroneSpawn;
+            facing = Quaternion.Euler(0f, -90f, 0f);
+        }
+        else
+        {
+            if (generator == null || size.x < 1 || size.y < 1 || size.x > 500 || size.y > 500 ||
+                buildings < 1 || buildings > 16)
+            {
+                InTraining = false;
+                menu.ShowError("Укажи размеры от 1 до 500 м и от 1 до 16 зданий.");
+                return;
+            }
+            var previous = (generator.seed, generator.mapSize, generator.buildingCount, generator.generateRoofs);
+            generator.seed = seed;
+            generator.mapSize = size;
+            generator.buildingCount = buildings;
+            generator.generateRoofs = roofs;
+            if (!generator.TryRegenerateMap())
+            {
+                (generator.seed, generator.mapSize, generator.buildingCount, generator.generateRoofs) = previous;
+                InTraining = false;
+                menu.ShowError("Здания не помещаются. Увеличь карту или уменьши число зданий.");
+                return;
+            }
+            var edge = new Vector3(-size.x / 2f + 0.65f, 0.05f, -size.y / 2f + 0.65f);
+            humanSpawn = generator.transform.TransformPoint(edge);
+            droneSpawn = generator.transform.TransformPoint(edge + new Vector3(0f, 1f, 2f));
+            facing = generator.transform.rotation * Quaternion.Euler(0f, 45f, 0f);
+        }
+
+        suburbanTraining = suburban;
+        trainingSeed = seed;
+        trainingMapSize = size;
+        trainingBuildingCount = buildings;
+        trainingRoofs = roofs;
+        InTraining = true;
+        sceneRig.human.SetTrainingSpawn(humanSpawn, facing);
+        sceneRig.drone.SetTrainingSpawn(droneSpawn, facing);
+        sceneRig.enabled = true;
+        SetMenuCamera(false);
+        menu.Hide();
+        LockCursor(true);
     }
 
     public void Resume() { menu.Hide(); LockCursor(phase != PrototypePhase.Finished); }

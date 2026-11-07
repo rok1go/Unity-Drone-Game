@@ -139,7 +139,11 @@ public static class DestructionSystem
                 (hit.attachedRigidbody != null &&
                  hit.attachedRigidbody.TryGetComponent<DestructionDebris>(out var chunk) &&
                  chunk.BlockCount > 1)))
-                candidates[block] = (hit.ClosestPoint(damage.position) - damage.position).sqrMagnitude;
+            {
+                float distance = (hit.ClosestPoint(damage.position) - damage.position).sqrMagnitude;
+                if (!candidates.TryGetValue(block, out float current) || distance < current)
+                    candidates[block] = distance;
+            }
         }
         var ordered = new List<DestructibleBlock>(candidates.Keys);
         ordered.Sort((a,b) =>

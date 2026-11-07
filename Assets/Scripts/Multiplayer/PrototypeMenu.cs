@@ -5,7 +5,7 @@ using UnityEngine.UIElements;
 
 public class PrototypeMenu : MonoBehaviour
 {
-    private enum Screen { Home, Play, Create, Join, Lobby, Pause, Loading }
+    private enum Screen { Home, Play, Create, Join, Lobby, Pause, Loading, Training, TrainingGeneration }
     public bool Visible { get; private set; }
     private MultiplayerPrototype app;
     private UIDocument document;
@@ -70,7 +70,7 @@ public class PrototypeMenu : MonoBehaviour
         screen = Screen.Home;
         Draw("ПРЯТКИ", "Люди против дронов");
         ActionButton(content, "Играть", ShowPlay, true);
-        ActionButton(content, "Тренировка", app.StartTraining);
+        ActionButton(content, "Тренировка", ShowTraining);
         ActionButton(content, "Выйти", Quit);
         Footer();
     }
@@ -83,6 +83,37 @@ public class PrototypeMenu : MonoBehaviour
         ActionButton(content, "Создать лобби", () => { app.SavePlayerName(nickname.value); ShowCreate(); }, true);
         ActionButton(content, "Присоединиться", () => { app.SavePlayerName(nickname.value); ShowJoin(); });
         ActionButton(content, "Назад", ShowHome); Footer();
+    }
+
+    private void ShowTraining()
+    {
+        screen = Screen.Training;
+        Draw("Тренировка", "Выбери карту для локальной игры.");
+        ActionButton(content, "Обычная карта", ShowTrainingGeneration, true);
+        ActionButton(content, "Воксельный пригород", () => app.StartTraining(true));
+        ActionButton(content, "Назад", ShowHome);
+        Footer();
+    }
+
+    private void ShowTrainingGeneration()
+    {
+        screen = Screen.TrainingGeneration;
+        Draw("Обычная карта", "Настрой генерацию перед запуском.");
+        var generator = app.TrainingGenerator;
+        if (generator != null)
+        {
+            var seed = new IntegerField("Сид") { value = generator.seed };
+            var width = new IntegerField("Ширина, м") { value = Mathf.RoundToInt(generator.mapSize.x) };
+            var depth = new IntegerField("Длина, м") { value = Mathf.RoundToInt(generator.mapSize.y) };
+            var buildings = new IntegerField("Зданий (1–16)") { value = generator.buildingCount };
+            var roofs = new Toggle("Крыши") { value = generator.generateRoofs };
+            content.Add(seed); content.Add(width); content.Add(depth); content.Add(buildings); content.Add(roofs);
+            ActionButton(content, "Начать тренировку", () => app.StartTraining(false,
+                seed.value, new Vector2(width.value, depth.value), buildings.value, roofs.value), true);
+        }
+        else content.Add(Text("Генератор карты отсутствует в сцене.", "menu-error"));
+        ActionButton(content, "Назад", ShowTraining);
+        Footer();
     }
 
     private void ShowCreate()

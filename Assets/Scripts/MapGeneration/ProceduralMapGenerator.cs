@@ -36,7 +36,11 @@ public class ProceduralMapGenerator : MonoBehaviour
     [SerializeField, HideInInspector] private GameObject generatedMap;
 
     [ContextMenu("Regenerate Map")]
-    public void RegenerateMap()
+    public void RegenerateMap() => TryRegenerateMap();
+
+    public void HideGeneratedMap() => ClearGeneratedContent();
+
+    public bool TryRegenerateMap()
     {
         ClampSettings();
         int columns = Mathf.CeilToInt(Mathf.Sqrt(buildingCount));
@@ -49,7 +53,7 @@ public class ProceduralMapGenerator : MonoBehaviour
         if (cellWidth < reservation || cellDepth < reservation)
         {
             Debug.LogWarning($"Map too small: each placement cell needs at least {reservation:F1} world units. Increase Map Size or reduce count/dimensions/spacing.", this);
-            return; // Keep the old map when the new settings cannot fit.
+            return false; // Keep the old map when the new settings cannot fit.
         }
 
         var random = new System.Random(seed); // Does not alter UnityEngine.Random's global state.
@@ -100,6 +104,7 @@ public class ProceduralMapGenerator : MonoBehaviour
             UnityEditor.Undo.CollapseUndoOperations(undoGroup);
         }
 #endif
+        return true;
     }
 
     private void ClearGeneratedContent()
