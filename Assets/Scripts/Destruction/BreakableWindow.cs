@@ -6,7 +6,7 @@ using UnityEngine.SceneManagement;
 
 [DisallowMultipleComponent]
 [RequireComponent(typeof(BoxCollider), typeof(MeshRenderer))]
-public sealed class BreakableWindow : MonoBehaviour
+public sealed class BreakableWindow : MonoBehaviour, IInteractable
 {
     private const float InteractionDistance = 2.6f;
     private const float InteractionSpeed = 3.2f;
@@ -57,10 +57,11 @@ public sealed class BreakableWindow : MonoBehaviour
                hit.collider.TryGetComponent(out window) && window.isActiveAndEnabled;
     }
 
-    public static void TryInteract(Ray view)
+    public string Prompt => isActiveAndEnabled && paneCollider.enabled ? "Разбить стекло" : null;
+
+    public void Interact(Vector3 user)
     {
-        if (TryGetTarget(view, out var window) && window.Shatter(view.origin, InteractionSpeed))
-            window.PlayBreakSound(false);
+        if (Shatter(user + Vector3.up * 1.5f, InteractionSpeed)) PlayBreakSound(false);
     }
 
     internal bool Shatter(Vector3 source, float speed, bool fromBlast = false)
@@ -81,26 +82,26 @@ public sealed class BreakableWindow : MonoBehaviour
 
     internal void PlayBreakSound(bool fromBlast)
     {
-        if (breakSound == null) breakSound = Resources.Load<AudioClip>("Audio/GlassBreak");
-        if (breakSound == null) return;
+        breakSound = SoundBank.WindowBreak;
+        GameAudio.Play(breakSound, transform.position, fromBlast ? 0.95f : 0.45f, Random.Range(0.97f, 1.03f),
+            SoundCategory.Effects, fromBlast ? 5f : 2f, fromBlast ? 90f : 40f);
+        // The shards land a moment later, on the floor below the frame.
+        if (isActiveAndEnabled) StartCoroutine(ShardsLand(fromBlast));
+    }
 
-        var sound = new GameObject("Glass break sound");
-        SceneManager.MoveGameObjectToScene(sound, gameObject.scene);
-        sound.transform.position = transform.position;
-        var audio = sound.AddComponent<AudioSource>();
-        audio.playOnAwake = false;
-        audio.clip = breakSound;
-        audio.volume = fromBlast ? 0.95f : 0.32f;
-        audio.spatialBlend = fromBlast ? 0.8f : 1f;
-        audio.rolloffMode = AudioRolloffMode.Linear;
-        audio.minDistance = fromBlast ? 5f : 1.5f;
-        audio.maxDistance = fromBlast ? 65f : 16f;
-        audio.dopplerLevel = 0f;
-        // Wait for the explosion transient and the listener's camera switch.
-        const float blastDelay = 0.4f;
-        if (fromBlast) audio.PlayDelayed(blastDelay);
-        else audio.Play();
-        Destroy(sound, breakSound.length + (fromBlast ? blastDelay : 0f) + 0.1f);
+    private System.Collections.IEnumerator ShardsLand(bool fromBlast)
+    {
+        yield return new WaitForSeconds(Random.Range(0.28f, 0.42f));
+        Vector3 floor = transform.position - Vector3.up * transform.lossyScale.y * 0.5f;
+        GameAudio.Play(SoundBank.GlassShards, floor, fromBlast ? 0.35f : 0.22f, Random.Range(0.95f, 1.05f),
+            SoundCategory.Effects, 1.5f, fromBlast ? 45f : 25f);
+    }
+
+    // Struck but holding: a dull knock on the pane.
+    internal void PlayKnock(float strength)
+    {
+        GameAudio.Play(SoundBank.GlassKnock, transform.position, Mathf.Clamp(0.08f + strength * 0.04f, 0.08f, 0.3f),
+            Random.Range(0.95f, 1.05f), SoundCategory.Effects, 1.5f, 25f);
     }
 }
 

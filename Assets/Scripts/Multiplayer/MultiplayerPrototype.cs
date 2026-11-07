@@ -39,6 +39,7 @@ public class MultiplayerPrototype : MonoBehaviour
     private Camera menuCamera;
     private string scenePath;
     public ProceduralMapGenerator TrainingGenerator { get; private set; }
+    public PrototypeLobbySettings TrainingSettings { get; set; } = new PrototypeLobbySettings();
     private bool suburbanTraining;
     private int trainingSeed, trainingBuildingCount;
     private Vector2 trainingMapSize;
@@ -49,6 +50,8 @@ public class MultiplayerPrototype : MonoBehaviour
     private readonly Dictionary<ulong, float> lastPoseArrival = new Dictionary<ulong, float>();
     private readonly Dictionary<ulong, float> lastCorrection = new Dictionary<ulong, float>();
     private readonly Dictionary<ulong, float> respawns = new Dictionary<ulong, float>();
+    private readonly Dictionary<ulong, int> humanLives = new Dictionary<ulong, int>();
+    private readonly Dictionary<ulong, float> humanRespawns = new Dictionary<ulong, float>();
     private readonly Dictionary<ulong, string> mapHashes = new Dictionary<ulong, string>();
     private readonly HashSet<ulong> sceneReady = new HashSet<ulong>();
     private readonly List<ulong> recipients = new List<ulong>();
@@ -64,6 +67,7 @@ public class MultiplayerPrototype : MonoBehaviour
     private bool handlersRegistered, leaving, sceneLoading, loadForMatch, waitingForScenes, localControlInitialized, localActive;
     private bool dronesWon;
     private string resultReason;
+    private RoundSummary summary;
     private float loadingDeadline;
     private string networkStartupError;
 
@@ -83,11 +87,16 @@ public class MultiplayerPrototype : MonoBehaviour
         DontDestroyOnLoad(gameObject);
         Application.runInBackground = true;
         PlayerName = PlayerPrefs.GetString("prototype.playerName", "Игрок");
+        TrainingSettings = PrototypeLobbySettings.Load();
         // The menu and scene gate must exist even if the optional network startup fails.
         menu = gameObject.AddComponent<PrototypeMenu>();
         menu.Initialize(this);
         replication = new DestructionReplication();
         replication.WindowRequested += RequestWindow;
+        replication.DoorRequested += RequestDoor;
+        CarrySystem.CarryChanged += CarryChanged;
+        CarrySystem.GripsChanged += GripsChanged;
+        HumanController.FallDamaged += FallDamaged;
         SceneManager.sceneLoaded += SceneLoaded;
         try { InitializeNetworkManager(); }
         catch (Exception exception)
@@ -160,8 +169,9 @@ public class MultiplayerPrototype : MonoBehaviour
         }
         if (waitingForScenes && network != null && network.IsListening)
         {
+            Transform mapRoot = loadForMatch ? PrepareMatchMap() : null;
             // Index the fresh map before any destruction op can reference it.
-            localMapHash = replication.BuildIndex();
+            localMapHash = replication.BuildIndex(mapRoot);
             if (IsHost) { sceneReady.Add(LocalId); TryFinishLoading(); }
             else SendServer(new PrototypeMessage { Kind = "scene-ready", Generation = generation, Text = localMapHash });
         }
@@ -170,6 +180,33 @@ public class MultiplayerPrototype : MonoBehaviour
             phase = PrototypePhase.Lobby; menu.ShowHome(); LockCursor(false);
             if (!string.IsNullOrEmpty(networkStartupError)) menu.ShowError(networkStartupError);
         }
+    }
+
+    private PrototypeLobbySettings CurrentSettings => IsHost ? settings : State.Settings ?? settings;
+    private bool suburbMatch;
+
+    // Builds the match map on every peer before indexing. The suburb is generated from the same
+    // data file everywhere, so its blocks, windows and doors get identical indices.
+    private Transform PrepareMatchMap()
+    {
+        MatchRules.Apply(CurrentSettings);
+        suburbMatch = false;
+        if (sceneRig == null) return null;
+        if (!CurrentSettings.Suburb)
+        {
+            if (TrainingGenerator != null) TrainingGenerator.TryRegenerateMap();
+            return TrainingGenerator != null ? TrainingGenerator.MapRoot : null;
+        }
+        var map = SuburbanTrainingMap.Create(sceneRig.transform);
+        if (map == null)
+        {
+            Debug.LogWarning("Voxel suburb data is missing; the match uses the generated map.");
+            return null;
+        }
+        if (TrainingGenerator != null) TrainingGenerator.HideGeneratedMap();
+        if (sceneRig.testArea != null) sceneRig.testArea.gameObject.SetActive(false);
+        suburbMatch = true;
+        return map.transform;
     }
 
     public void SavePlayerName(string name)
@@ -202,7 +239,7 @@ public class MultiplayerPrototype : MonoBehaviour
         Busy = true; menu.SetBusy("Создаём лобби…");
         try
         {
-            options.Clamp(); settings = options; phase = PrototypePhase.Lobby;
+            options.Clamp(); options.Save(); settings = options; phase = PrototypePhase.Lobby;
             await InitializeServices();
             session = await MultiplayerService.Instance.CreateSessionAsync(new SessionOptions
             {
@@ -276,6 +313,7 @@ public class MultiplayerPrototype : MonoBehaviour
         if (IsHost)
         {
             members.Remove(id); sceneReady.Remove(id); respawns.Remove(id); mapHashes.Remove(id);
+            CarrySystem.Instance.Release(id);
             lastPoseArrival.Remove(id); lastCorrection.Remove(id);
             if (actors.TryGetValue(id, out var actor)) { if (actor != null) Destroy(actor.gameObject); actors.Remove(id); }
             if (waitingForScenes) TryFinishLoading();
@@ -454,9 +492,97 @@ public class MultiplayerPrototype : MonoBehaviour
             }
             return;
         }
-        if (message.Kind == "window" && InMatch && message.Generation == generation && phase != PrototypePhase.Finished)
+        if (message.Kind == "grab" && InMatch && message.Generation == generation && phase != PrototypePhase.Finished)
+        {
+            // The host carries for remote players: the object follows their replicated view.
+            // The grab point arrives in the object's own space, so it lands on the same spot of the host's copy.
+            bool ok = settings.Carrying && actors.TryGetValue(sender, out var actor) && actor.Team == PrototypeTeam.Humans && !actor.Dead &&
+                      actor.View != null && message.Pose != null && NetSync.Finite(message.Pose.Position) &&
+                      message.Pose.Position.sqrMagnitude < 25f &&
+                      CarrySystem.Instance.Grab(sender, actor.View.transform, actor.GetComponentsInChildren<Collider>(),
+                          replication.Resolve(unchecked((uint)message.Index)), message.Pose.Position);
+            if (!ok) Send(sender, new PrototypeMessage { Kind = "carry", Ready = false });
+            return;
+        }
+        if ((message.Kind == "pocket" || message.Kind == "throw" || message.Kind == "beam") && InMatch &&
+            message.Generation == generation && phase != PrototypePhase.Finished)
+        {
+            if (!actors.TryGetValue(sender, out var owner) || owner.Human == null || owner.Dead || owner.View == null) return;
+            Vector3 eye = owner.View.transform.position;
+            if (message.Kind == "pocket")
+            {
+                var body = replication.Resolve(unchecked((uint)message.Index));
+                if (body != null) Inventory.HostPickup(sender, owner.Human, body.GetComponent<PhysicsProp>(), eye);
+            }
+            else if (message.Kind == "throw" && message.Pose != null && NetSync.Finite(message.Pose.Position) &&
+                     (message.Pose.Position - eye).sqrMagnitude < 2f * 2f)
+                Inventory.HostThrow(sender, message.Value, new Ray(message.Pose.Position, message.Pose.Rotation * Vector3.forward),
+                    owner.Human.GetComponent<Rigidbody>().linearVelocity);
+            else if (message.Kind == "beam") { Inventory.HostBeam(sender, owner.Human, message.Ready); PublishState(); }
+            return;
+        }
+        if (message.Kind == "dronelight" && InMatch && message.Generation == generation)
+        {
+            if (actors.TryGetValue(sender, out var pilot) && pilot.Drone != null) SetDroneLight(sender, message.Ready);
+            return;
+        }
+        if (message.Kind == "push" && InMatch && message.Generation == generation && phase != PrototypePhase.Finished)
+        {
+            // The shove follows the pusher's replicated view, from no further than arm's reach.
+            if (settings.Carrying && actors.TryGetValue(sender, out var pusher) && pusher.Human != null && !pusher.Dead &&
+                pusher.View != null && message.Pose != null && NetSync.Finite(message.Pose.Position) &&
+                (message.Pose.Position - pusher.View.transform.position).sqrMagnitude < (CarrySystem.PushReach + 1f) * (CarrySystem.PushReach + 1f))
+                CarrySystem.Push(replication.Resolve(unchecked((uint)message.Index)), message.Pose.Position,
+                    message.Pose.Position - pusher.View.transform.position);
+            return;
+        }
+        if (message.Kind == "hold" && InMatch && message.Generation == generation && message.Pose != null &&
+            NetSync.Finite(message.Pose.Position))
+        {
+            CarrySystem.Instance.SetHold(sender, message.Pose.Position.x, message.Pose.Rotation, message.Ready);
+            return;
+        }
+        if (message.Kind == "drop" && InMatch && message.Generation == generation)
+        {
+            CarrySystem.Instance.Release(sender);
+            return;
+        }
+        if (message.Kind == "attach" && InMatch && message.Generation == generation)
+        {
+            if (actors.TryGetValue(sender, out var actor) && !actor.Dead && actor.Human != null && phase != PrototypePhase.Finished)
+            {
+                if (message.Value == 1) CarrySystem.Instance.QuickBarricade(sender);
+                else CarrySystem.Instance.Attach(sender);
+            }
+            return;
+        }
+        if (message.Kind == "power-request" && InMatch && message.Generation == generation && phase != PrototypePhase.Finished)
+        {
+            if (actors.TryGetValue(sender, out var actor) && actor.Human != null && !actor.Dead && actor.View != null)
+                PowerSystem.Instance?.Toggle(message.Index, new Ray(actor.View.transform.position, actor.View.transform.forward));
+            return;
+        }
+        if (message.Kind == "fall" && InMatch && settings.FallDamage && message.Generation == generation &&
+            phase != PrototypePhase.Finished && actors.TryGetValue(sender, out var falling) && falling.Human != null && !falling.Dead)
+        {
+            falling.Human.ApplyDamage(Mathf.Clamp(message.Value, 0, 200)); PublishState(); return;
+        }
+        if (message.Kind == "door" && InMatch && message.Generation == generation && phase != PrototypePhase.Finished)
         {
             if (actors.TryGetValue(sender, out var actor) && actor.Team == PrototypeTeam.Humans && !actor.Dead &&
+                message.Value >= -1 && message.Value <= 3 && message.Value != 2 &&
+                replication.TryGetDoorPosition(message.Index, out Vector3 door))
+            {
+                Vector3 feet = actor.HasPose ? actor.LatestPose.Position : actor.transform.position;
+                if ((door - feet).sqrMagnitude < 5f * 5f)
+                    replication.HostSetDoor(message.Index, (InteractiveDoor.DoorState)message.Value, feet + Vector3.up);
+            }
+            return;
+        }
+        if (message.Kind == "window" && InMatch && message.Generation == generation && phase != PrototypePhase.Finished)
+        {
+            // People break panes by hand, a drone by flying through them; both only within a few metres.
+            if (actors.TryGetValue(sender, out var actor) && !actor.Dead &&
                 replication.TryGetWindowPosition(message.Index, out Vector3 window))
             {
                 Vector3 eye = (actor.HasPose ? actor.LatestPose.Position : actor.transform.position) + Vector3.up * 1.5f;
@@ -475,9 +601,34 @@ public class MultiplayerPrototype : MonoBehaviour
 
     private void ProcessServerMessage(PrototypeMessage message)
     {
+        if (message.Kind == "power" && InMatch && message.Generation == generation)
+        { PowerSystem.Instance?.Apply(message.Index, message.Value); return; }
+        if (message.Kind == "stoneblast" && InMatch && message.Generation == generation && message.Pose != null &&
+            NetSync.Finite(message.Pose.Position))
+        {
+            float radius = message.Value / 10f, impulse = message.Index / 10f;
+            CursedStone.PlayEffect(message.Pose.Position, radius, impulse);
+            DestructionSystem.ApplyBlastForces(message.Pose.Position, radius, impulse);
+            return;
+        }
+        if (message.Kind == "mark" && InMatch && message.Generation == generation && message.Pose != null &&
+            NetSync.Finite(message.Pose.Position))
+        { ActivityMarks.Show(message.Pose.Position); return; }
+        if (message.Kind == "inv" && InMatch && message.Generation == generation)
+        {
+            var items = new List<PhysicsProp>();
+            foreach (string part in (message.Text ?? "").Split(','))
+            {
+                var body = int.TryParse(part, out int id) ? replication.Resolve(unchecked((uint)id)) : null;
+                items.Add(body != null ? body.GetComponent<PhysicsProp>() : null);
+            }
+            Inventory.ApplyLocal(items);
+            return;
+        }
         if (message.Kind == "state" && message.State != null)
         {
             State = message.State; phase = State.Phase;
+            PowerSystem.Instance?.ApplySnapshot(State.PowerStates);
             members.Clear(); foreach (var member in State.Members) members[member.Id] = member;
             if ((phase == PrototypePhase.Hiding || phase == PrototypePhase.Hunting || phase == PrototypePhase.Finished) && !InMatch)
                 SpawnMatchActors(State);
@@ -508,6 +659,10 @@ public class MultiplayerPrototype : MonoBehaviour
                 DestructionSystem.ApplyBlastForces(actor.transform.position, actor.Drone.explosionRadius,
                     actor.Drone.explosionImpulse, actor.GetComponent<Rigidbody>());
         }
+        else if (message.Kind == "grips")
+            PlayerCarry.ApplyRemoteGrips(replication.Resolve(unchecked((uint)message.Index)), message.Value);
+        else if (message.Kind == "carry")
+            PlayerCarry.ApplyRemoteState(message.Ready ? replication.Resolve(unchecked((uint)message.Index)) : null);
         else if (message.Kind == "correct" && message.Pose != null &&
                  actors.TryGetValue(LocalId, out var self) && self != null)
             self.ApplyCorrection(message.Pose.Position);
@@ -521,8 +676,9 @@ public class MultiplayerPrototype : MonoBehaviour
     {
         if (!IsHost || phase != PrototypePhase.Lobby || Busy) return;
         options.Clamp(); options.MaxPlayers = settings.MaxPlayers;
-        settings = options;
-        foreach (var member in members.Values) member.Ready = false;
+        if (JsonUtility.ToJson(settings) == JsonUtility.ToJson(options)) return;
+        // Players keep their "ready": the new settings reach everyone at once through the lobby state.
+        settings = options; settings.Save();
         PublishState();
     }
 
@@ -533,7 +689,7 @@ public class MultiplayerPrototype : MonoBehaviour
         { menu.ShowError("Нужны хотя бы два игрока. Все должны нажать «Готов»."); return; }
         int drones = members.Values.Count(m => m.Team == PrototypeTeam.Drones);
         if (drones == 0 || drones == members.Count) { menu.ShowError("Выберите обе команды: люди и дроны."); return; }
-        if (settings.DroneStock < drones) { menu.ShowError("Запас дронов должен быть не меньше числа пилотов."); return; }
+        if (settings.DroneStock > 0 && settings.DroneStock < drones) { menu.ShowError("Запас дронов должен быть не меньше числа пилотов."); return; }
         Busy = true; menu.SetBusy("Запускаем матч…");
         try
         {
@@ -546,6 +702,14 @@ public class MultiplayerPrototype : MonoBehaviour
 
     private void BeginSceneReload(bool match)
     {
+        if (match)
+        {
+            settings = JsonUtility.FromJson<PrototypeLobbySettings>(JsonUtility.ToJson(settings));
+            settings.Time = MatchEnvironment.Resolve(settings.Time, new System.Random());
+            // A fixed seed rebuilds the same town; otherwise every round gets a new one. Clients take this value.
+            settings.ResolvedSeed = settings.Seed != 0 ? settings.Seed : new System.Random().Next(1, int.MaxValue);
+            PublishState();
+        }
         generation++; phase = PrototypePhase.Loading; loadForMatch = match; waitingForScenes = true;
         loadingDeadline = Time.unscaledTime + 90f;
         sceneReady.Clear();
@@ -601,17 +765,36 @@ public class MultiplayerPrototype : MonoBehaviour
         if (sceneRig == null || InMatch) return;
         InMatch = true; waitingForScenes = false;
         settings = state.Settings ?? settings;
+        humanLives.Clear(); humanRespawns.Clear();
+        RoundStats.Begin(); summary = null; droneLights.Clear();
         int humanIndex = 0, droneIndex = 0;
         foreach (var member in state.Members)
         {
             bool drone = member.Team == PrototypeTeam.Drones;
             GameObject template = drone ? droneTemplate : humanTemplate;
-            Vector3 position = template.transform.position + Vector3.right * (drone ? droneIndex++ : humanIndex++) * 2.2f;
-            var obj = Instantiate(template, position, template.transform.rotation);
+            int index = drone ? droneIndex++ : humanIndex++;
+            Vector3 position;
+            Quaternion rotation = template.transform.rotation;
+            if (suburbMatch)
+            {
+                // Humans line up along the sidewalk, alternating either side of the spawn; drones hover above.
+                float offset = ((index + 1) / 2) * (index % 2 == 0 ? 1f : -1f) * 2.2f;
+                position = drone ? SuburbanTrainingMap.DroneSpawn + Vector3.right * index * 2.2f
+                    : SuburbanTrainingMap.HumanSpawn + SuburbanTrainingMap.SpawnLine * offset;
+                rotation = Quaternion.identity;
+            }
+            else position = template.transform.position + Vector3.right * index * 2.2f;
+            var obj = Instantiate(template, position, rotation);
             obj.name = (drone ? "Drone_" : "Human_") + member.Id;
             obj.SetActive(true);
             var actor = obj.AddComponent<PrototypeNetworkActor>(); actor.Configure(member.Id, member.Team);
             actors.Add(member.Id, actor);
+            if (actor.Human != null)
+            {
+                actor.Human.SetSpawn(position, rotation);
+                humanLives[member.Id] = settings.HumanLives;
+                if (IsHost) RoundStats.Track(actor.Human, member.Name);
+            }
             if (actor.Drone != null) actor.Drone.SetFlightLocked(true);
             if (member.Id == LocalId)
             {
@@ -662,12 +845,15 @@ public class MultiplayerPrototype : MonoBehaviour
     {
         return new PrototypeState
         {
+            PowerStates = PowerSystem.Instance != null ? PowerSystem.Instance.CaptureFlags() : null,
             Code = session != null ? session.Code : "", Settings = settings,
             Members = members.Values.OrderBy(m => m.Id).ToArray(),
             Actors = actors.Values.Where(a => a != null).Select(a => new PrototypeActorState
             {
-                Id = a.OwnerId, Health = a.Human != null ? a.Human.Health : 0f, Dead = a.Dead
+                Id = a.OwnerId, Health = a.Human != null ? a.Human.Health : 0f, Dead = a.Dead,
+                Flashlight = a.Drone != null ? DroneLightOn(a.OwnerId) : Inventory.HostBeamOn(a.OwnerId)
             }).ToArray(),
+            Summary = phase == PrototypePhase.Finished ? summary : null,
             Phase = phase, PhaseEnds = phaseEnds,
             DroneStock = stock, DronesWon = dronesWon, ResultReason = resultReason, Generation = generation
         };
@@ -696,6 +882,7 @@ public class MultiplayerPrototype : MonoBehaviour
             foreach (var actor in actors.Values)
                 if (actor != null)
                     hash = hash * 31 + (actor.Dead ? 1 : 0) +
+                        ((actor.Drone != null ? DroneLightOn(actor.OwnerId) : Inventory.HostBeamOn(actor.OwnerId)) ? 5 : 0) +
                         Mathf.RoundToInt(actor.Human != null ? actor.Human.Health * 10f : 0f) * 2;
             return hash;
         }
@@ -735,7 +922,7 @@ public class MultiplayerPrototype : MonoBehaviour
     {
         if ((InMatch || InTraining) && Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame)
         {
-            if (MenuOpen) { menu.Hide(); LockCursor(phase != PrototypePhase.Finished); }
+            if (MenuOpen) { menu.BackOrResume(); }
             else { menu.ShowPause(); LockCursor(false); }
         }
         if (network == null || !network.IsListening) return;
@@ -763,7 +950,23 @@ public class MultiplayerPrototype : MonoBehaviour
     private void AdvanceRound()
     {
         if (phase == PrototypePhase.Finished) return;
-        if (!actors.Values.Any(a => a.Team == PrototypeTeam.Humans && !a.Dead)) { Finish(true, "Все люди найдены."); return; }
+        foreach (var actor in actors.Values)
+        {
+            if (actor.Human == null || !actor.Dead || humanRespawns.ContainsKey(actor.OwnerId)) continue;
+            if (!humanLives.TryGetValue(actor.OwnerId, out int lives) || lives <= 1) continue;
+            humanLives[actor.OwnerId] = lives - 1;
+            humanRespawns[actor.OwnerId] = Time.time + settings.RespawnSeconds;
+        }
+        foreach (ulong id in humanRespawns.Keys.ToArray())
+        {
+            if (Time.time < humanRespawns[id]) continue;
+            humanRespawns.Remove(id);
+            if (!actors.TryGetValue(id, out var actor)) continue;
+            actor.Human.ResetHuman(); actor.ResetNetPose();
+            if (!actor.IsLocal) actor.MakeReplicaBody();
+            RefreshLocalControl(true); PublishState();
+        }
+        if (!actors.Values.Any(a => a.Team == PrototypeTeam.Humans && !a.Dead) && humanRespawns.Count == 0) { Finish(true, "Все люди найдены."); return; }
         if (!members.Values.Any(m => m.Team == PrototypeTeam.Drones)) { Finish(false, "Все пилоты покинули матч."); return; }
         if (phase == PrototypePhase.Hiding && network.ServerTime.Time >= phaseEnds)
         {
@@ -773,11 +976,11 @@ public class MultiplayerPrototype : MonoBehaviour
             RefreshLocalControl(true); PublishState();
         }
         if (phase != PrototypePhase.Hunting) return;
-        if (stock <= 0) { Finish(false, "Дроны закончились."); return; }
+        if (settings.DroneStock > 0 && stock <= 0) { Finish(false, "Дроны закончились."); return; }
         if (network.ServerTime.Time >= phaseEnds) { Finish(false, "Время поиска вышло."); return; }
         foreach (ulong id in respawns.Keys.ToArray())
         {
-            if (Time.time < respawns[id] || stock <= actors.Values.Count(a => a.Drone != null && !a.Dead)) continue;
+            if (Time.time < respawns[id] || (settings.DroneStock > 0 && stock <= actors.Values.Count(a => a.Drone != null && !a.Dead))) continue;
             respawns.Remove(id);
             if (!actors.TryGetValue(id, out var actor)) continue;
             actor.Drone.SetFlightLocked(false); actor.Drone.ResetDrone();
@@ -790,6 +993,7 @@ public class MultiplayerPrototype : MonoBehaviour
     private void Finish(bool drones, string reason)
     {
         phase = PrototypePhase.Finished; dronesWon = drones; resultReason = reason;
+        summary = RoundStats.Finish(drones);
         foreach (var actor in actors.Values)
         {
             if (actor.Human != null) actor.Human.SetControlled(false);
@@ -814,7 +1018,8 @@ public class MultiplayerPrototype : MonoBehaviour
         if (!InMatch || !IsHost) return;
         var actor = drone.GetComponent<PrototypeNetworkActor>();
         if (actor == null) return;
-        stock = Mathf.Max(0, stock - 1); respawns[actor.OwnerId] = Time.time + 3f;
+        if (settings.DroneStock > 0) stock = Mathf.Max(0, stock - 1);
+        respawns[actor.OwnerId] = Time.time + settings.RespawnSeconds;
         Broadcast(new PrototypeMessage { Kind = "blast", ActorId = actor.OwnerId, Pose = actor.Capture() });
         PublishState();
     }
@@ -822,6 +1027,145 @@ public class MultiplayerPrototype : MonoBehaviour
     private void RequestWindow(int index)
     {
         if (InMatch && !IsHost) SendServer(new PrototypeMessage { Kind = "window", Index = index, Generation = generation });
+    }
+
+    public void RequestGrab(Rigidbody body, Vector3 localAnchor)
+    {
+        if (InMatch && !IsHost && replication.TryGetId(body, out uint id))
+            SendServer(new PrototypeMessage { Kind = "grab", Index = unchecked((int)id), Generation = generation,
+                Pose = new PrototypePose { Position = localAnchor, Rotation = Quaternion.identity } });
+        else PlayerCarry.ApplyRemoteState(null);
+    }
+
+    // Host: a place where a drone pilot noticed activity (only the point; see ActivityMarks).
+    public void SendMark(ulong pilot, Vector3 point)
+    {
+        if (InMatch && IsHost && phase == PrototypePhase.Hunting)
+            Send(pilot, new PrototypeMessage { Kind = "mark", Generation = generation,
+                Pose = new PrototypePose { Position = point, Rotation = Quaternion.identity } });
+    }
+
+    // Host: a drone's searchlight was switched (the pilot asks, everybody sees it through the state).
+    private readonly Dictionary<ulong, bool> droneLights = new Dictionary<ulong, bool>();
+    public void RequestDroneLight(bool on)
+    {
+        if (!InMatch) return;
+        if (IsHost) SetDroneLight(LocalId, on);
+        else SendServer(new PrototypeMessage { Kind = "dronelight", Ready = on, Generation = generation });
+    }
+    private void SetDroneLight(ulong owner, bool on)
+    {
+        droneLights[owner] = on;
+        if (actors.TryGetValue(owner, out var actor) && actor.Drone != null) actor.Drone.SetSearchlight(on);
+        PublishState();
+    }
+    private bool DroneLightOn(ulong owner) => droneLights.TryGetValue(owner, out bool on) ? on : MatchEnvironment.IsNight;
+
+    // Host: a blast that is not a drone's (the strange stone); clients play its flash and push their avatar.
+    public void BroadcastBlast(Vector3 at, float radius, float impulse)
+    {
+        if (InMatch && IsHost)
+            Broadcast(new PrototypeMessage { Kind = "stoneblast", Generation = generation, Value = Mathf.RoundToInt(radius * 10f),
+                Index = Mathf.RoundToInt(impulse * 10f), Pose = new PrototypePose { Position = at, Rotation = Quaternion.identity } });
+    }
+
+    public void RequestPocket(PhysicsProp prop)
+    {
+        if (InMatch && !IsHost && prop != null && replication.TryGetId(prop.Body, out uint id))
+            SendServer(new PrototypeMessage { Kind = "pocket", Index = unchecked((int)id), Generation = generation });
+    }
+
+    public void RequestThrow(int slot, Ray view)
+    {
+        if (InMatch && !IsHost)
+            SendServer(new PrototypeMessage { Kind = "throw", Value = slot, Generation = generation,
+                Pose = new PrototypePose { Position = view.origin, Rotation = Quaternion.LookRotation(view.direction) } });
+    }
+
+    public void RequestBeam(bool on)
+    {
+        if (InMatch && !IsHost) SendServer(new PrototypeMessage { Kind = "beam", Ready = on, Generation = generation });
+    }
+
+    // Host: a remote player's pocket contents, as prop ids (-1 = empty).
+    public void SendInventory(ulong owner, IReadOnlyList<PhysicsProp> items)
+    {
+        if (!InMatch || !IsHost || owner == LocalId) return;
+        var ids = new string[items.Count];
+        for (int i = 0; i < items.Count; i++)
+            ids[i] = items[i] != null && replication.TryGetId(items[i].Body, out uint id) ? unchecked((int)id).ToString() : "-";
+        Send(owner, new PrototypeMessage { Kind = "inv", Text = string.Join(",", ids), Generation = generation });
+    }
+
+    public void RequestPush(Rigidbody body, Vector3 point)
+    {
+        if (InMatch && !IsHost && replication.TryGetId(body, out uint id))
+            SendServer(new PrototypeMessage { Kind = "push", Index = unchecked((int)id), Generation = generation,
+                Pose = new PrototypePose { Position = point, Rotation = Quaternion.identity } });
+    }
+
+    public void RequestHold(float distance, Quaternion relative, bool turning)
+    {
+        if (InMatch && !IsHost)
+            SendServer(new PrototypeMessage { Kind = "hold", Generation = generation, Ready = turning,
+                Pose = new PrototypePose { Position = new Vector3(distance, 0f, 0f), Rotation = relative } });
+    }
+
+    public void RequestDrop()
+    {
+        if (InMatch && !IsHost) SendServer(new PrototypeMessage { Kind = "drop", Generation = generation });
+    }
+
+    public void RequestAttach(bool quick = false)
+    {
+        if (InMatch && !IsHost) SendServer(new PrototypeMessage { Kind = "attach", Generation = generation, Value = quick ? 1 : 0 });
+    }
+
+    public void RequestPower(int index) => SendServer(new PrototypeMessage { Kind = "power-request", Index = index, Generation = generation });
+    public void PublishPower(int index, int flags)
+    {
+        if (InMatch && IsHost) Broadcast(new PrototypeMessage { Kind = "power", Index = index, Value = flags, Generation = generation });
+    }
+    public bool TryLocalView(out Ray view)
+    {
+        var camera = InMatch && actors.TryGetValue(LocalId, out var actor) ? actor.View : sceneRig?.human?.viewCamera;
+        view = camera != null ? new Ray(camera.transform.position, camera.transform.forward) : default;
+        return camera != null;
+    }
+    private void FallDamaged(HumanController human, float damage)
+    {
+        if (!InMatch || !settings.FallDamage) return;
+        if (IsHost) { human.ApplyDamage(damage); PublishState(); }
+        else SendServer(new PrototypeMessage { Kind = "fall", Value = Mathf.CeilToInt(damage), Generation = generation });
+    }
+
+    // Host: everyone sees how many players hold an object ("players 1/2").
+    private void GripsChanged(Rigidbody body, int count)
+    {
+        if (!InMatch || !IsHost || !replication.TryGetId(body, out uint id)) return;
+        Broadcast(new PrototypeMessage { Kind = "grips", Index = unchecked((int)id), Value = count });
+    }
+
+    // Host: tell a remote player what they are now carrying (or that they let go).
+    private void CarryChanged(ulong carrier, Rigidbody body)
+    {
+        if (!InMatch || !IsHost || carrier == LocalId || carrier == CarrySystem.OfflineCarrier) return;
+        uint id = 0;
+        bool carrying = body != null && replication.TryGetId(body, out id);
+        Send(carrier, new PrototypeMessage { Kind = "carry", Ready = carrying, Index = unchecked((int)id) });
+    }
+
+    private void RequestDoor(int index, InteractiveDoor.DoorState state)
+    {
+        if (InMatch && !IsHost)
+            SendServer(new PrototypeMessage { Kind = "door", Index = index, Value = (int)state, Generation = generation });
+    }
+
+    public string NameOf(HumanController human)
+    {
+        var actor = human != null ? human.GetComponent<PrototypeNetworkActor>() : null;
+        return actor != null && members.TryGetValue(actor.OwnerId, out var member) && !string.IsNullOrEmpty(member.Name)
+            ? member.Name : "Игрок";
     }
 
     public bool CanObserve(HumanController human)
@@ -849,6 +1193,8 @@ public class MultiplayerPrototype : MonoBehaviour
     public void StartTraining(bool suburban, int seed = 0, Vector2 size = default, int buildings = 0, bool roofs = true)
     {
         if (HasSession || sceneRig == null || sceneRig.enabled) return;
+        TrainingSettings.ResolvedSeed = 0;   // a fresh town every training round unless a seed is fixed
+        MatchRules.Apply(TrainingSettings);
         var generator = TrainingGenerator;
         Vector3 humanSpawn, droneSpawn;
         Quaternion facing;
@@ -864,7 +1210,7 @@ public class MultiplayerPrototype : MonoBehaviour
             if (sceneRig.testArea != null) sceneRig.testArea.gameObject.SetActive(false);
             humanSpawn = SuburbanTrainingMap.HumanSpawn;
             droneSpawn = SuburbanTrainingMap.DroneSpawn;
-            facing = Quaternion.Euler(0f, -90f, 0f);
+            facing = Quaternion.identity;
         }
         else
         {
@@ -954,7 +1300,15 @@ public class MultiplayerPrototype : MonoBehaviour
     {
         leaving = true;
         SceneManager.sceneLoaded -= SceneLoaded;
-        if (replication != null) { replication.WindowRequested -= RequestWindow; replication.Dispose(); }
+        if (replication != null)
+        {
+            replication.WindowRequested -= RequestWindow;
+            replication.DoorRequested -= RequestDoor;
+            CarrySystem.CarryChanged -= CarryChanged;
+            CarrySystem.GripsChanged -= GripsChanged;
+            HumanController.FallDamaged -= FallDamaged;
+            replication.Dispose();
+        }
         DestructionSystem.Authority = true;
         if (network != null)
         {

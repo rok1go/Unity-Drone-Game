@@ -1733554,28 +1733554,28 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::DroneController
   viewCamera: {fileID: 1562290935}
   flightMode: 0
-  maximumTilt: 31.5
-  tiltInputSmoothing: 0.165
-  thrustToWeight: 2.4
+  maximumTilt: 30
+  tiltInputSmoothing: 0.12
+  thrustToWeight: 3.2
   acroRate: 300
-  yawRate: 150
-  levelingResponse: 3.5
+  yawRate: 200
+  levelingResponse: 5
   rateResponse: 14
-  keyboardClimbSpeed: 4
-  keyboardDescentSpeed: 3
+  keyboardClimbSpeed: 10
+  keyboardDescentSpeed: 9
   altitudeHoldResponse: 2
-  verticalResponse: 5
-  throttleResponse: 3
-  airDrag: 0.025
+  verticalResponse: 10
+  throttleResponse: 8
+  airDrag: 0.032
   stickExpo: 0.35
-  hoverBraking: 3.5
-  maxHoverBrakeAcceleration: 9
-  tiltReleaseSmoothing: 0.06
+  hoverBraking: 6.5
+  maxHoverBrakeAcceleration: 18
+  tiltReleaseSmoothing: 0.08
   cameraMouseSensitivity: 0.12
   cameraUptilt: 15
   cameraFieldOfView: 100
-  explosionRadius: 7
-  explosionImpulse: 21
+  explosionRadius: 9
+  explosionImpulse: 30
   maximumHumanDamage: 150
   impactDetonationSpeed: 9.722222
   minimumImpactNormalSpeed: 4

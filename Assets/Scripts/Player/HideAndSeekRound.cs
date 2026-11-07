@@ -33,6 +33,9 @@ public class HideAndSeekRound : MonoBehaviour
     private bool initialized;
     private bool networkDriven;
     private int networkTotal, networkAlive;
+    private AudioSource preparationMusic;
+    private bool musicStarted;
+    private RoundPhase musicPhase = RoundPhase.Finished;
 
     public void InitializeNetwork(LocalControlSwitcher switcher)
     {
@@ -44,6 +47,7 @@ public class HideAndSeekRound : MonoBehaviour
         bool finishedNow = phase == RoundPhase.Finished && Phase != RoundPhase.Finished;
         Phase = phase; DronesWon = dronesWon; phaseEndsAt = Time.time + remaining;
         networkTotal = total; networkAlive = alive;
+        if (phase != RoundPhase.Hiding || remaining <= 0f) StopPreparationMusic();
         if (finishedNow) controls.ShowRoundResult();
     }
 
@@ -53,6 +57,8 @@ public class HideAndSeekRound : MonoBehaviour
         controls = switcher;
         foreach (var human in FindObjectsByType<HumanController>(FindObjectsInactive.Include))
             if (human.gameObject.scene == gameObject.scene) humans.Add(human);
+        RoundStats.Begin();
+        foreach (var human in humans) RoundStats.Track(human, "Вы");
         initialized = true;
         Phase = RoundPhase.Hiding;
         phaseEndsAt = Time.time + hidingSeconds;
@@ -62,6 +68,7 @@ public class HideAndSeekRound : MonoBehaviour
 
     private void Update()
     {
+        UpdatePreparationMusic();
         if (!initialized || networkDriven || Phase == RoundPhase.Finished) return;
         if (humans.Count > 0 && AliveHumans == 0)
         {
@@ -72,6 +79,7 @@ public class HideAndSeekRound : MonoBehaviour
         if (Phase == RoundPhase.Hiding)
         {
             Phase = RoundPhase.Hunting;
+            StopPreparationMusic();
             phaseEndsAt = Time.time + huntingSeconds;
             if (controls.drone != null) controls.drone.SetFlightLocked(false);
             // Local prototype: hide the human first, then search with the drone.
@@ -83,7 +91,9 @@ public class HideAndSeekRound : MonoBehaviour
     private void Finish(bool dronesWon)
     {
         Phase = RoundPhase.Finished;
+        StopPreparationMusic();
         DronesWon = dronesWon;
+        RoundStats.Finish(dronesWon);
         foreach (var human in humans)
             if (human != null) human.SetControlled(false);
         controls.ShowRoundResult();
@@ -106,4 +116,36 @@ public class HideAndSeekRound : MonoBehaviour
             Debug.LogException(exception, this);
         }
     }
+
+    private void UpdatePreparationMusic()
+    {
+        if (!initialized) return;
+        if (Phase != musicPhase)
+        {
+            musicPhase = Phase; musicStarted = false;
+            if (Phase != RoundPhase.Hiding) StopPreparationMusic();
+        }
+        if (Phase != RoundPhase.Hiding || RemainingSeconds <= 0f) { StopPreparationMusic(); return; }
+        if (preparationMusic != null) preparationMusic.volume = 0.22f * GameAudio.MixHeadroom * GameSettings.Volume(SoundCategory.Ambient);
+        if (musicStarted) return;
+        musicStarted = true;
+        if (preparationMusic == null)
+        {
+            preparationMusic = gameObject.AddComponent<AudioSource>();
+            preparationMusic.playOnAwake = false; preparationMusic.loop = true;
+            preparationMusic.spatialBlend = 0f;
+            preparationMusic.clip = Resources.Load<AudioClip>("Audio/Preparation");
+        }
+        if (preparationMusic.clip == null) return;
+        preparationMusic.volume = 0.22f * GameAudio.MixHeadroom * GameSettings.Volume(SoundCategory.Ambient);
+        float total = networkDriven && MultiplayerPrototype.Instance != null ? MultiplayerPrototype.Instance.State.Settings.HidingSeconds : hidingSeconds;
+        preparationMusic.time = Mathf.Repeat(Mathf.Max(0f, total - RemainingSeconds), preparationMusic.clip.length);
+        preparationMusic.Play();
+        preparationMusic.SetScheduledEndTime(AudioSettings.dspTime + RemainingSeconds);
+    }
+    private void StopPreparationMusic()
+    {
+        if (preparationMusic != null && preparationMusic.isPlaying) preparationMusic.Stop();
+    }
+    private void OnDisable() => StopPreparationMusic();
 }

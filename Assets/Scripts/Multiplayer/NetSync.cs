@@ -5,7 +5,7 @@ using UnityEngine;
 // Compact binary snapshots for high-rate data. Low-rate control stays in JSON messages.
 public struct NetPose
 {
-    public const byte CrouchingFlag = 1, MotorsFlag = 2, AcroFlag = 4;
+    public const byte CrouchingFlag = 1, MotorsFlag = 2, AcroFlag = 4, ProneFlag = 8, LeanLeftFlag = 16, LeanRightFlag = 32;
     // Sender-local timestamp. Receivers map it onto their own clock with StreamClock.
     public double Time;
     public Vector3 Position;

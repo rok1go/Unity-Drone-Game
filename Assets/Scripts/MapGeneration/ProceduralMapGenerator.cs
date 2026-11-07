@@ -34,6 +34,7 @@ public class ProceduralMapGenerator : MonoBehaviour
     public Material roofMaterial;
 
     [SerializeField, HideInInspector] private GameObject generatedMap;
+    public Transform MapRoot => generatedMap != null ? generatedMap.transform : null;
 
     [ContextMenu("Regenerate Map")]
     public void RegenerateMap() => TryRegenerateMap();
@@ -93,7 +94,7 @@ public class ProceduralMapGenerator : MonoBehaviour
             CreateBuilding(buildings, i, type, new Vector3(x, 0, z), rotation);
         }
         CreateInteriorLighting(buildings);
-        if (enableInteriorLights)
+        if (enableInteriorLights && !Application.isPlaying)
             generatedMap.AddComponent<InteriorLightBudget>().maximumActive = maxInteriorLights;
 #if UNITY_EDITOR
         if (!Application.isPlaying)
@@ -231,6 +232,7 @@ public class ProceduralMapGenerator : MonoBehaviour
     private void CreateInteriorLighting(Transform buildings)
     {
         if (!enableInteriorLights) return;
+        var power = Application.isPlaying ? generatedMap.AddComponent<PowerSystem>() : null;
         // Separate random stream: lighting never changes the seeded map layout.
         var random = new System.Random(unchecked(seed ^ 0x51A7));
         int activeCount = 0;
@@ -267,7 +269,33 @@ public class ProceduralMapGenerator : MonoBehaviour
             light.shadowBias = 0.02f;
             light.shadowNormalBias = 0.2f;
             light.enabled = activeCount++ < maxInteriorLights;
+            if (power != null)
+            {
+                // A wall beside the room is the switch's mounting surface.
+                DestructibleBlock support = null;
+                Vector3 at = building.TransformPoint(room.localPosition + Vector3.up * 1.3f * blockSize);
+                Vector3 mounted = at, facing = building.forward;
+                float best = float.PositiveInfinity;
+                foreach (var block in building.GetComponentsInChildren<DestructibleBlock>())
+                {
+                    var collider = block.GetComponent<Collider>();
+                    if (collider == null || block.name.Contains("Roof") || block.name.Contains("Floor")) continue;
+                    Vector3 point = collider.ClosestPoint(at);
+                    float d = (point - at).sqrMagnitude;
+                    if (d >= best) continue;
+                    best = d; support = block; mounted = point;
+                    facing = (at - point).normalized;
+                }
+                if (facing.sqrMagnitude < 0.5f) facing = building.forward;
+                var toggle = CreateBox("Switch_" + room.name, lighting, Vector3.zero, new Vector3(0.1f, 0.16f, 0.045f), roofMaterial);
+                toggle.transform.position = mounted + facing * 0.035f;
+                toggle.transform.rotation = Quaternion.LookRotation(facing);
+                var device = toggle.AddComponent<PoweredDevice>();
+                power.Register(device, building.GetSiblingIndex() + 1, support);
+                device.Initialize("свет", light, null, fixture.GetComponent<Renderer>());
+            }
         }
+        if (power != null) power.InitializeStates();
     }
     private void WallColumn(Transform parent, int x, int z, bool door, Material material)
     {
@@ -284,8 +312,11 @@ public class ProceduralMapGenerator : MonoBehaviour
         block.SetStructure(parent.GetComponentInParent<BuildingStructure>(), new Vector3Int(x,y,z));
     }
 
-    private void Furniture(string label, Transform parent, float x, float z, float width, float height, float depth) =>
+    private void Furniture(string label, Transform parent, float x, float z, float width, float height, float depth)
+    {
+        if (Application.isPlaying && !MatchRules.Current.Items) return;
         MakeDestructible(CreateBox(label, parent, GridPosition(x, height / 2, z), new Vector3(width, height, depth) * blockSize, roofMaterial));
+    }
 
     private DestructibleBlock MakeDestructible(GameObject block)
     {

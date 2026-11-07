@@ -55,13 +55,22 @@ public class DestructionDebris : MonoBehaviour
 
     private void OnCollisionEnter(Collision collision)
     {
-        if (!DestructionSystem.Authority || impactPending || BlockCount < 2 || collision.contactCount == 0 ||
-            Time.time - DetachedAt < 0.15f) return;
+        if (!DestructionSystem.Authority || collision.contactCount == 0) return;
         var contact = collision.GetContact(0);
         float speed = Mathf.Abs(Vector3.Dot(collision.relativeVelocity, contact.normal));
+        if (Body != null) GameAudio.ContactImpact(this, Body, collision, SoundMaterialOf(this));
+        if (impactPending || BlockCount < 2 || Time.time - DetachedAt < 0.15f) return;
         if (speed < (Damage.impactFractureSpeed > 0 ? Damage.impactFractureSpeed : 6f)) return;
         impactPending = true;
         StartCoroutine(FractureAfterContact(contact.point, speed));
+    }
+
+    // Rubble sounds like what it is made of: brick and concrete knock, plaster and wood thud.
+    internal static SoundMaterial SoundMaterialOf(Component chunk)
+    {
+        var block = chunk.GetComponentInChildren<DestructibleBlock>();
+        if (block != null && block.IsVehicle) return SoundMaterial.Metal;
+        return GameAudio.MaterialFor(block != null ? block.Material : (byte)1);
     }
 
     private IEnumerator FractureAfterContact(Vector3 point, float speed)

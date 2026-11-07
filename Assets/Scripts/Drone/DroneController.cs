@@ -9,36 +9,42 @@ public class DroneController : MonoBehaviour
     public enum FlightMode { Angle, Acro }
     [Header("FPV flight")]
     public FlightMode flightMode = FlightMode.Angle;
-    [Range(15, 70)] public float maximumTilt = 31.5f;
+    [Range(15, 70)] public float maximumTilt = 30f;
     [Tooltip("Time constant for smoothing pitch/roll input in seconds.")]
-    [Range(0.05f, 0.5f)] public float tiltInputSmoothing = 0.165f;
-    [Range(1.2f, 5f)] public float thrustToWeight = 2.4f;
+    [Range(0.05f, 0.5f)] public float tiltInputSmoothing = 0.12f;
+    [Range(1.2f, 5f)] public float thrustToWeight = 3.2f;
     [Range(90, 720)] public float acroRate = 300f;
-    [Range(45, 360)] public float yawRate = 150f;
-    [Range(2, 12)] public float levelingResponse = 3.5f;
+    [Range(45, 360)] public float yawRate = 200f;
+    [Range(2, 12)] public float levelingResponse = 5f;
     [Range(4, 30)] public float rateResponse = 14f;
     [Header("Keyboard altitude assist (ANGLE)")]
-    [Min(0.5f)] public float keyboardClimbSpeed = 4f;
-    [Min(0.5f)] public float keyboardDescentSpeed = 3f;
+    [Min(0.5f)] public float keyboardClimbSpeed = 10f;
+    [Min(0.5f)] public float keyboardDescentSpeed = 9f;
     [Range(0.5f, 5f)] public float altitudeHoldResponse = 2f;
-    [Range(1f, 10f)] public float verticalResponse = 5f;
-    [Range(1f, 8f)] public float throttleResponse = 3f;
-    [Range(0.005f, 0.1f)] public float airDrag = 0.025f;
+    [Range(1f, 10f)] public float verticalResponse = 10f;
+    [Range(1f, 8f)] public float throttleResponse = 8f;
+    [Range(0.005f, 0.1f)] public float airDrag = 0.032f;
     [Range(0, 0.8f)] public float stickExpo = 0.35f;
     [Header("ANGLE hover assist")]
     [Tooltip("Horizontal velocity damping when the movement stick/buttons are released (per second).")]
-    [Range(0f, 10f)] public float hoverBraking = 3.5f;
+    [Range(0f, 10f)] public float hoverBraking = 6.5f;
     [Tooltip("Maximum assisted braking acceleration in metres per second squared.")]
-    [Min(0f)] public float maxHoverBrakeAcceleration = 9f;
+    [Min(0f)] public float maxHoverBrakeAcceleration = 18f;
     [Tooltip("Time to release the bank command when movement input returns to centre.")]
-    [Range(0.02f, 0.5f)] public float tiltReleaseSmoothing = 0.06f;
+    [Range(0.02f, 0.5f)] public float tiltReleaseSmoothing = 0.08f;
+    [Header("ANGLE direction change")]
+    [Tooltip("Per second: how fast speed opposite to a new command is cancelled.")]
+    [Range(0f, 12f)] public float directionReversal = 7f;
+    [Tooltip("Per second: how fast sideways drift is removed while a direction is held.")]
+    [Range(0f, 8f)] public float directionDriftDamping = 2.5f;
+    [Min(0f)] public float maxDirectionAssist = 22f;
     [Header("FPV camera")]
     [Range(0.02f, 0.5f)] public float cameraMouseSensitivity = 0.12f;
     [Range(0, 40)] public float cameraUptilt = 15f;
     [Range(70, 120)] public float cameraFieldOfView = 100f;
     [Header("Self destruct")]
-    [Min(0.1f)] public float explosionRadius = 7f;
-    [Min(0)] public float explosionImpulse = 21f;
+    [Min(0.1f)] public float explosionRadius = 9f;
+    [Min(0)] public float explosionImpulse = 30f;
     [Tooltip("Damage to an exposed human at the blast centre; decreases to zero at the radius edge.")]
     [Min(0f)] public float maximumHumanDamage = 150f;
     [Tooltip("Minimum total relative collision speed to detonate, in metres per second (35 km/h by default).")]
@@ -83,6 +89,41 @@ public class DroneController : MonoBehaviour
     private bool gamepadInputActive;
     private Vector3 spawnPosition;
     private Quaternion spawnRotation;
+    private readonly System.Collections.Generic.List<Transform> rotors = new System.Collections.Generic.List<Transform>();
+    private float rotorAngle;
+    private Light navigationLight;
+
+    // Props spin with the throttle; at night a small light makes the drone just visible.
+    private void LateUpdate()
+    {
+        float rate = MotorsArmed && !IsDestroyed ? 900f + 2400f * Throttle : 0f;
+        rotorAngle = Mathf.Repeat(rotorAngle + rate * Time.deltaTime, 360f);
+        for (int i = 0; i < rotors.Count; i++)
+            rotors[i].localRotation = Quaternion.Euler(0f, i % 2 == 0 ? rotorAngle : -rotorAngle, 0f);
+        bool night = MatchEnvironment.IsNight && MotorsArmed && !IsDestroyed;
+        if (night && navigationLight == null)
+        {
+            var obj = new GameObject("Navigation light");
+            obj.transform.SetParent(transform, false);
+            obj.transform.localPosition = new Vector3(0f, -0.12f, 0f);
+            navigationLight = obj.AddComponent<Light>();
+            navigationLight.type = LightType.Point;
+            navigationLight.color = new Color(1f, 0.32f, 0.25f);
+            navigationLight.range = 4.5f;
+            navigationLight.shadows = LightShadows.None;
+            navigationLight.renderMode = LightRenderMode.ForcePixel;
+        }
+        if (navigationLight != null)
+        {
+            navigationLight.enabled = night;
+            // A slow blink, like a real navigation strobe.
+            navigationLight.intensity = 0.8f + 0.7f * Mathf.Max(0f, Mathf.Sin(Time.time * 4f));
+        }
+        if (IsControlled && viewCamera != null) GameSettings.ApplyCamera(viewCamera, true);
+        // Cheap per frame: follows destruction, night/day defaults and who is flying it.
+        if (searchlight != null ? searchlight.enabled != (SearchlightOn && !IsDestroyed) || (searchlight.shadows != LightShadows.None) != IsControlled
+            : SearchlightOn && !IsDestroyed) UpdateSearchlight();
+    }
 
     private void Awake()
     {
@@ -101,11 +142,27 @@ public class DroneController : MonoBehaviour
         body.maxAngularVelocity = 16f;
         body.solverIterations = 8;
         body.solverVelocityIterations = 3;
+        // A small FPV quad (~65 cm across) that fits through a window. The scene's airframe is 1.3 m; a clone
+        // of an already resized drone keeps its size.
+        var frame = GetComponent<BoxCollider>();
+        if (frame != null && frame.size.x > 0.8f)
+        {
+            const float scale = 0.5f;
+            frame.size *= scale; frame.center *= scale;
+            foreach (Transform part in transform)
+            {
+                if (viewCamera != null && part == viewCamera.transform) continue;
+                part.localScale *= scale; part.localPosition *= scale;
+            }
+        }
         if (viewCamera != null)
         {
             CenterCamera();
             viewCamera.fieldOfView = cameraFieldOfView;
         }
+        if (GameSettings.Current.DroneAcro) flightMode = FlightMode.Acro;
+        foreach (Transform part in GetComponentsInChildren<Transform>(true))
+            if (part.name == "Rotor") rotors.Add(part);
         SetControlled(false);
     }
 
@@ -139,25 +196,33 @@ public class DroneController : MonoBehaviour
             return;
         }
         var keyboard = Keyboard.current;
+        var settings = GameSettings.Current;
+        stickExpo = settings.DroneExpo;
         Vector2 look = Mouse.current != null ? Mouse.current.delta.ReadValue() : Vector2.zero;
         // Horizontal mouse turns the drone; vertical mouse only looks up/down.
-        mouseYawRate = Mathf.Clamp(look.x * cameraMouseSensitivity / Mathf.Max(0.001f, Time.deltaTime), -yawRate, yawRate);
-        cameraPitch = Mathf.Clamp(cameraPitch - look.y * cameraMouseSensitivity, -85f, 85f);
+        float sensitivity = settings.DroneSensitivity;
+        mouseYawRate = Mathf.Clamp(look.x * sensitivity / Mathf.Max(0.001f, Time.deltaTime), -yawRate, yawRate);
+        cameraPitch = Mathf.Clamp(cameraPitch - look.y * sensitivity * (settings.InvertDrone ? -1f : 1f), -85f, 85f);
         if (viewCamera != null)
             viewCamera.transform.localRotation = Quaternion.Euler(cameraPitch, 0, 0);
         bool keyboardFlight = false;
         if (keyboard != null)
         {
-            pitchInput = (keyboard.wKey.isPressed ? 1 : 0) - (keyboard.sKey.isPressed ? 1 : 0);
-            rollInput = (keyboard.dKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed ? 1 : 0);
-            verticalInput = (keyboard.spaceKey.isPressed ? 1 : 0) -
-                (keyboard.leftCtrlKey.isPressed || keyboard.rightCtrlKey.isPressed ? 1 : 0);
+            pitchInput = (GameSettings.Held(GameAction.MoveForward) ? 1 : 0) - (GameSettings.Held(GameAction.MoveBack) ? 1 : 0);
+            rollInput = (GameSettings.Held(GameAction.MoveRight) ? 1 : 0) - (GameSettings.Held(GameAction.MoveLeft) ? 1 : 0);
+            verticalInput = (GameSettings.Held(GameAction.DroneUp) ? 1 : 0) - (GameSettings.Held(GameAction.DroneDown) ? 1 : 0);
             keyboardFlight = verticalInput != 0 || pitchInput != 0 || rollInput != 0;
             if (keyboardFlight) gamepadInputActive = false;
-            if (keyboard.cKey.wasPressedThisFrame) CenterCamera();
-            if (keyboard.vKey.wasPressedThisFrame) ToggleFlightMode();
-            if (keyboard.bKey.wasPressedThisFrame) SetMotorsArmed(!MotorsArmed);
-            if (keyboard.fKey.wasPressedThisFrame) BeginSelfDestruct();
+            if (GameSettings.Pressed(GameAction.DroneCenterCamera)) CenterCamera();
+            if (GameSettings.Pressed(GameAction.DroneMode)) ToggleFlightMode();
+            if (GameSettings.Pressed(GameAction.DroneMotors)) SetMotorsArmed(!MotorsArmed);
+            if (GameSettings.Pressed(GameAction.DroneDetonate)) BeginSelfDestruct();
+            if (GameSettings.Pressed(GameAction.DroneLight))
+            {
+                bool on = !SearchlightOn;
+                SetSearchlight(on);   // at once for the pilot; the host shows it to everybody
+                MultiplayerPrototype.Instance?.RequestDroneLight(on);
+            }
         }
         if (IsDestroyed) return;
         var pad = Gamepad.current;
@@ -240,6 +305,7 @@ public class DroneController : MonoBehaviour
         if (IsDestroyed || IsFlightLocked || IsNetworkReplica) return;
         // Passive air resistance also applies with the motors off.
         body.AddForce(-body.linearVelocity * body.linearVelocity.magnitude * airDrag, ForceMode.Acceleration);
+        KeepInsidePlayArea();
         if (!MotorsArmed) return;
         Vector2 requestedTilt = Vector2.ClampMagnitude(new Vector2(rollInput, pitchInput), 1f);
         bool releasingTilt = flightMode == FlightMode.Angle && requestedTilt.sqrMagnitude < 0.0001f;
@@ -254,6 +320,20 @@ public class DroneController : MonoBehaviour
             Vector3 braking = Vector3.ClampMagnitude(-horizontalVelocity * damping,
                 Mathf.Max(0f, maxHoverBrakeAcceleration));
             body.AddForce(braking, ForceMode.Acceleration);
+        }
+        else if (flightMode == FlightMode.Angle)
+        {
+            // Direction-change assist: speed against the new command is cancelled hard and sideways drift
+            // gently, so the drone swings round quickly without banking harder (the camera stays calm).
+            Vector3 forward = Vector3.ProjectOnPlane(transform.forward, Vector3.up).normalized;
+            Vector3 right = Vector3.Cross(Vector3.up, forward);
+            Vector3 command = (right * requestedTilt.x + forward * requestedTilt.y).normalized;
+            Vector3 horizontal = Vector3.ProjectOnPlane(body.linearVelocity, Vector3.up);
+            float along = Vector3.Dot(horizontal, command);
+            Vector3 against = along < 0f ? command * along : Vector3.zero;
+            Vector3 drift = horizontal - command * along;
+            Vector3 assist = -against * directionReversal - drift * directionDriftDamping;
+            body.AddForce(Vector3.ClampMagnitude(assist, maxDirectionAssist), ForceMode.Acceleration);
         }
         if (!gamepadInputActive)
         {
@@ -313,6 +393,64 @@ public class DroneController : MonoBehaviour
         body.AddRelativeTorque(Vector3.ClampMagnitude((targetRates - localRates) * rateResponse, 80f), ForceMode.Acceleration);
     }
 
+    // ---------------- searchlight ----------------
+
+    private Light searchlight;
+    private bool? searchlightOn;
+    // On by default at night, off by day; L switches it. Online the host's state wins (SetSearchlight).
+    public bool SearchlightOn => searchlightOn ?? MatchEnvironment.IsNight;
+
+    public void SetSearchlight(bool on)
+    {
+        searchlightOn = on;
+        UpdateSearchlight();
+    }
+
+    // A spot under the camera, so it points where the pilot looks: it lights walls, windows and props and
+    // gives the drone away to people. Only the pilot's own copy casts (low-resolution) shadows; everyone
+    // else sees a plain, cheaper light.
+    private void UpdateSearchlight()
+    {
+        bool lit = SearchlightOn && !IsDestroyed && viewCamera != null;
+        if (!lit) { if (searchlight != null) searchlight.enabled = false; return; }
+        if (searchlight == null)
+        {
+            var obj = new GameObject("Searchlight");
+            obj.transform.SetParent(viewCamera.transform, false);
+            obj.transform.localPosition = new Vector3(0f, -0.06f, 0.08f);
+            searchlight = obj.AddComponent<Light>();
+            searchlight.type = LightType.Spot;
+            searchlight.spotAngle = 52f; searchlight.innerSpotAngle = 22f;
+            searchlight.intensity = 3f; searchlight.color = new Color(0.92f, 0.96f, 1f);
+            searchlight.shadowResolution = UnityEngine.Rendering.LightShadowResolution.Low;
+            searchlight.shadowNearPlane = 0.3f;
+        }
+        bool own = IsControlled;
+        searchlight.range = own ? 30f : 24f;
+        searchlight.shadows = own ? LightShadows.Hard : LightShadows.None;
+        searchlight.renderMode = own ? LightRenderMode.ForcePixel : LightRenderMode.Auto;
+        searchlight.enabled = true;
+    }
+
+    // Past the town's edge (or above its ceiling) a growing push turns the drone back, like flying into wind:
+    // no wall to crash into and detonate on, and no flying off forever.
+    private void KeepInsidePlayArea()
+    {
+        Bounds area = SuburbanTrainingMap.PlayArea;
+        if (area.size.x <= 0f) return;
+        const float margin = 6f, ceiling = 70f, stiffness = 6f;
+        Vector3 p = body.position, push = Vector3.zero;
+        if (p.x > area.max.x + margin) push.x = area.max.x + margin - p.x;
+        else if (p.x < area.min.x - margin) push.x = area.min.x - margin - p.x;
+        if (p.z > area.max.z + margin) push.z = area.max.z + margin - p.z;
+        else if (p.z < area.min.z - margin) push.z = area.min.z - margin - p.z;
+        if (p.y > area.center.y + ceiling) push.y = area.center.y + ceiling - p.y;
+        if (push == Vector3.zero) return;
+        // Spring back plus damping of the outward velocity.
+        Vector3 outward = Vector3.Project(body.linearVelocity, -push.normalized);
+        body.AddForce(Vector3.ClampMagnitude(push * stiffness - outward * 2f, 40f), ForceMode.Acceleration);
+    }
+
     public void BeginSelfDestruct()
     {
         if (!IsControlled || IsArmed || IsDestroyed) return;
@@ -322,6 +460,18 @@ public class DroneController : MonoBehaviour
     private void OnCollisionEnter(Collision collision)
     {
         if (IsDestroyed || IsFlightLocked || IsNetworkReplica) return;
+        // Glass does not set off the charge: the drone smashes through the pane and keeps most of its speed.
+        var pane = collision.collider.GetComponent<BreakableWindow>();
+        if (pane != null)
+        {
+            Vector3 before = -collision.relativeVelocity;
+            if (before.sqrMagnitude > 0.5f && pane.Shatter(body.position - before.normalized, Mathf.Clamp(before.magnitude * 0.5f, 3f, 8f)))
+            {
+                pane.PlayBreakSound(false);
+                body.linearVelocity = before * 0.85f;
+            }
+            return;
+        }
         // Require both fast travel and a meaningful hit into the surface, rather than a scrape.
         if (collision.relativeVelocity.sqrMagnitude < impactDetonationSpeed * impactDetonationSpeed) return;
         for (int i = 0; i < collision.contactCount; i++)
@@ -342,13 +492,14 @@ public class DroneController : MonoBehaviour
         IsDestroyed = true;
         IsArmed = false;
         Vector3 position = body.position;
-        DestructionSystem.ApplyExplosion(new ExplosionDamage
+        int destroyed = DestructionSystem.ApplyExplosion(new ExplosionDamage
         {
             position = position, radius = explosionRadius, impulse = explosionImpulse,
             maxFragments = maxFragmentsPerExplosion, maxActiveDebris = maxActiveDebris, debrisLifetime = debrisLifetime,
             enableDebrisCleanup = enableDebrisCleanup, contactMaterial = debrisContactMaterial,
             impactFractureSpeed = impactFractureSpeed, humanDamage = maximumHumanDamage
         }, body);
+        RoundStats.Explosion(destroyed);
         DroneExplosionEffect.Play(position, explosionMaterial, explosionRadius, explosionEffectDuration,
             explosionParticleCount, explosionImpulse / 21f);
         SetControlled(false);

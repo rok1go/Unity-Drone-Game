@@ -4,7 +4,8 @@ using UnityEngine.InputSystem;
 [RequireComponent(typeof(Camera), typeof(AudioListener))]
 public class SpectatorController : MonoBehaviour
 {
-    public bool AllowFreeCamera { get; set; } = true;
+    // Off: the fallen only watch living teammates and cannot scout the map for them.
+    public bool AllowFreeCamera { get; set; }
     public HumanController ObservedHuman { get; private set; }
     public bool IsFollowing => ObservedHuman != null && !ObservedHuman.IsEliminated &&
         ObservedHuman.gameObject.activeInHierarchy;
@@ -83,11 +84,22 @@ public class SpectatorController : MonoBehaviour
         transform.position += Vector3.ClampMagnitude(motion, 1f) * speed * Time.unscaledDeltaTime;
     }
 
+    // Over the shoulder of the watched player, smoothed so network jitter does not shake the view, and pulled
+    // in front of walls so it never looks through them.
     private void LateUpdate()
     {
         if (!IsFollowing) return;
-        var source = ObservedHuman.viewCamera;
-        transform.SetPositionAndRotation(source.transform.position, source.transform.rotation);
-        view.fieldOfView = source.fieldOfView;
+        var source = ObservedHuman.viewCamera.transform;
+        Vector3 head = source.position;
+        Vector3 back = -source.forward * 1.9f + Vector3.up * 0.35f + source.right * 0.35f;
+        float distance = back.magnitude;
+        if (Physics.SphereCast(head, 0.18f, back / distance, out var hit, distance, Physics.DefaultRaycastLayers,
+                QueryTriggerInteraction.Ignore) && hit.collider.GetComponentInParent<HumanController>() != ObservedHuman)
+            distance = Mathf.Max(0.2f, hit.distance - 0.05f);
+        Vector3 target = head + back.normalized * distance;
+        float blend = 1f - Mathf.Exp(-Time.unscaledDeltaTime * 12f);
+        transform.position = Vector3.Lerp(transform.position, target, blend);
+        transform.rotation = Quaternion.Slerp(transform.rotation, Quaternion.LookRotation(head + source.forward * 4f - transform.position), blend);
+        view.fieldOfView = source.GetComponent<Camera>().fieldOfView;
     }
 }

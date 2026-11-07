@@ -9,6 +9,7 @@ public class DroneHud : MonoBehaviour
     [SerializeField, HideInInspector] private PanelSettings panel;
     private VisualElement osd, humanHealth, healthFill, damageFlash, crosshair, result;
     private VisualElement hintWrap, roleIcon, windowPrompt;
+    private Label windowPromptText;
     private VisualElement warningPanel;
     private DroneFlightDisplay flightDisplay;
     private Label flightClock, flightState, droneHeading, homeDistance, verticalSpeed, horizontalSpeed,
@@ -82,6 +83,7 @@ public class DroneHud : MonoBehaviour
         if (osdFont != null) osd.style.unityFontDefinition = FontDefinition.FromFont(osdFont);
         damageFlash = root.Q("damageFlash"); crosshair = root.Q("crosshair"); result = root.Q("roundResult");
         windowPrompt = root.Q("windowPrompt");
+        windowPromptText = windowPrompt.Q<Label>(className: "window-prompt-label");
         role = root.Q<Label>("playerRole"); phase = root.Q<Label>("roundPhase");
         hintWrap = root.Q("hintWrap"); roleIcon = root.Q("roleIcon"); helpKey = root.Q<Label>("helpKey");
         roundTimer = root.Q<Label>("roundTimer"); aliveCount = root.Q<Label>("aliveCount");
@@ -102,6 +104,143 @@ public class DroneHud : MonoBehaviour
         result.pickingMode = PickingMode.Position;
         restartButton.pickingMode = PickingMode.Position;
         restartButton.clicked += RestartRound;
+        BuildInventoryBar(root);
+    }
+
+    private readonly System.Collections.Generic.List<VisualElement> markRings = new System.Collections.Generic.List<VisualElement>();
+
+    // Faint rings where the pilot noticed activity: at the spot, growing and fading over a couple of seconds.
+    private void DrawActivityMarks(Camera view)
+    {
+        var root = document.rootVisualElement;
+        var marks = ActivityMarks.Shown;
+        int used = 0;
+        if (view != null && view.isActiveAndEnabled)
+            foreach (var (point, time) in marks)
+            {
+                float age = (Time.unscaledTime - time) / ActivityMarks.Lifetime;
+                if (age >= 1f) continue;
+                Vector3 screen = view.WorldToScreenPoint(point);
+                if (screen.z <= 0.5f) continue;
+                Vector2 at = RuntimePanelUtils.ScreenToPanel(root.panel, new Vector2(screen.x, Screen.height - screen.y));
+                if (used == markRings.Count)
+                {
+                    var ring = new VisualElement { pickingMode = PickingMode.Ignore };
+                    ring.style.position = Position.Absolute;
+                    ring.style.borderTopWidth = ring.style.borderBottomWidth = ring.style.borderLeftWidth = ring.style.borderRightWidth = 2;
+                    ring.style.borderTopColor = ring.style.borderBottomColor = ring.style.borderLeftColor = ring.style.borderRightColor =
+                        new Color(1f, 0.78f, 0.35f, 0.85f);
+                    root.Add(ring);
+                    markRings.Add(ring);
+                }
+                var r = markRings[used++];
+                if (r.parent != root) root.Add(r);
+                // Further away, smaller; every ring grows a little as it fades.
+                float size = Mathf.Lerp(30f, 16f, Mathf.InverseLerp(5f, ActivityMarks.Range, screen.z)) * (1f + age * 0.6f);
+                r.style.width = r.style.height = size;
+                r.style.borderTopLeftRadius = r.style.borderTopRightRadius = r.style.borderBottomLeftRadius = r.style.borderBottomRightRadius = size * 0.5f;
+                r.style.left = at.x - size * 0.5f; r.style.top = at.y - size * 0.5f;
+                r.style.opacity = 0.7f * (1f - age);
+                r.style.display = DisplayStyle.Flex;
+            }
+        for (int i = used; i < markRings.Count; i++) markRings[i].style.display = DisplayStyle.None;
+    }
+
+    private VisualElement blindfold;
+    private Label blindfoldText;
+
+    private void UpdateBlindfold(bool active, HideAndSeekRound round)
+    {
+        var root = document.rootVisualElement;
+        if (blindfold == null || !root.Contains(blindfold))
+        {
+            blindfold = new VisualElement { name = "droneBlindfold", pickingMode = PickingMode.Ignore };
+            blindfold.style.position = Position.Absolute;
+            blindfold.style.left = blindfold.style.right = blindfold.style.top = blindfold.style.bottom = 0;
+            blindfold.style.backgroundColor = Color.black;
+            blindfold.style.justifyContent = Justify.Center; blindfold.style.alignItems = Align.Center;
+            blindfoldText = new Label { pickingMode = PickingMode.Ignore };
+            blindfoldText.style.fontSize = 22; blindfoldText.style.color = new Color(0.75f, 0.82f, 0.86f);
+            blindfold.Add(blindfoldText);
+            // Under the HUD panels (timer, hints) so the countdown stays readable.
+            root.Insert(0, blindfold);
+        }
+        blindfold.style.display = active ? DisplayStyle.Flex : DisplayStyle.None;
+        if (active) blindfoldText.text = "Люди прячутся. Поиск через " + Mathf.CeilToInt(round.RemainingSeconds) + " с";
+    }
+
+    private Label resultStats;
+    private Button lobbyButton;
+
+    // The round summary lines and the host's "back to lobby" button, under the existing result text.
+    private void EnsureResultExtras()
+    {
+        if (resultStats != null && result.Contains(resultStats)) return;
+        resultStats = new Label { name = "resultStats", pickingMode = PickingMode.Ignore };
+        resultStats.style.whiteSpace = WhiteSpace.Normal;
+        resultStats.style.fontSize = 14;
+        resultStats.style.marginTop = 10; resultStats.style.marginBottom = 10;
+        resultStats.style.color = new Color(0.86f, 0.92f, 0.95f);
+        resultStats.style.unityTextAlign = TextAnchor.UpperCenter;
+        resultReason.parent.Insert(resultReason.parent.IndexOf(resultReason) + 1, resultStats);
+        lobbyButton = new Button(() => MultiplayerPrototype.Instance.ReturnToLobby()) { text = "В лобби" };
+        foreach (var className in restartButton.GetClasses()) lobbyButton.AddToClassList(className);
+        lobbyButton.pickingMode = PickingMode.Position;
+        restartButton.parent.Insert(restartButton.parent.IndexOf(restartButton) + 1, lobbyButton);
+    }
+
+    private string SpectatingLine(HideAndSeekRound round)
+    {
+        var watched = controls.Spectator.ObservedHuman;
+        string name = MultiplayerPrototype.OnlineMatch ? MultiplayerPrototype.Instance.NameOf(watched) : "Человек";
+        return "Наблюдение: " + name + "  ·  Живых: " + (round != null ? round.AliveHumans : 0) + "  ·  Tab — следующий";
+    }
+
+    private VisualElement inventoryBar;
+    private readonly Label[] slotLabels = new Label[Inventory.Slots];
+    private readonly VisualElement[] slotBoxes = new VisualElement[Inventory.Slots];
+
+    // Three small slots at the bottom centre, in the HUD's glass style.
+    private void BuildInventoryBar(VisualElement root)
+    {
+        inventoryBar = new VisualElement { name = "inventoryBar", pickingMode = PickingMode.Ignore };
+        var s = inventoryBar.style;
+        s.position = Position.Absolute; s.bottom = 22; s.left = Length.Percent(50); s.translate = new Translate(Length.Percent(-50), 0);
+        s.flexDirection = FlexDirection.Row;
+        for (int i = 0; i < Inventory.Slots; i++)
+        {
+            var box = new VisualElement { pickingMode = PickingMode.Ignore };
+            box.style.width = 92; box.style.height = 40; box.style.marginLeft = box.style.marginRight = 3;
+            box.style.backgroundColor = new Color(0.06f, 0.12f, 0.16f, 0.55f);
+            box.style.borderTopLeftRadius = box.style.borderTopRightRadius = box.style.borderBottomLeftRadius = box.style.borderBottomRightRadius = 6;
+            box.style.borderTopWidth = box.style.borderBottomWidth = box.style.borderLeftWidth = box.style.borderRightWidth = 1;
+            box.style.justifyContent = Justify.Center; box.style.alignItems = Align.Center;
+            var label = new Label { pickingMode = PickingMode.Ignore };
+            label.style.fontSize = 12; label.style.color = new Color(0.85f, 0.92f, 0.95f);
+            label.style.unityTextAlign = TextAnchor.MiddleCenter;
+            box.Add(label);
+            inventoryBar.Add(box);
+            slotBoxes[i] = box; slotLabels[i] = label;
+        }
+        root.Add(inventoryBar);
+    }
+
+    private void RefreshInventoryBar(bool visible)
+    {
+        if (inventoryBar == null) return;
+        visible &= MatchRules.Current.Items;
+        inventoryBar.style.display = visible ? DisplayStyle.Flex : DisplayStyle.None;
+        if (!visible) return;
+        for (int i = 0; i < Inventory.Slots; i++)
+        {
+            var item = Inventory.LocalSlots[i];
+            bool selected = i == Inventory.Selected;
+            string name = item == null ? "—" : item.Pocket == PocketKind.Flashlight && Inventory.LocalBeam ? "Фонарик (вкл.)" : item.Label;
+            slotLabels[i].text = (i + 1) + "  " + name;
+            Color edge = selected ? new Color(0.55f, 0.95f, 0.85f, 0.9f) : new Color(0.6f, 0.75f, 0.8f, 0.18f);
+            slotBoxes[i].style.borderTopColor = slotBoxes[i].style.borderBottomColor =
+                slotBoxes[i].style.borderLeftColor = slotBoxes[i].style.borderRightColor = edge;
+        }
     }
 
     private void Update()
@@ -115,16 +254,40 @@ public class DroneHud : MonoBehaviour
         var drone = controls.drone;
         bool onlineDrone = MultiplayerPrototype.OnlineMatch && MultiplayerPrototype.Instance.LocalIsDrone;
         bool flying = !finished && controls.ControllingDrone && drone != null && (drone.IsControlled || onlineDrone) && !drone.IsDestroyed;
+        DrawActivityMarks(flying ? drone.viewCamera : null);
+        // While the people hide the drone pilot sees nothing: a black screen until the search begins.
+        UpdateBlindfold(!finished && round != null && round.Phase == HideAndSeekRound.RoundPhase.Hiding &&
+            (onlineDrone || controls.ControllingDrone), round);
         if (flying) flightDisplay.UpdateTelemetry(drone, cachedGround);
         osd.style.display = flying ? DisplayStyle.Flex : DisplayStyle.None;
         bool aiming = !finished && !controls.IsSpectating &&
             (flying || (controls.human != null && controls.human.IsControlled));
         crosshair.style.display = aiming && !flying ? DisplayStyle.Flex : DisplayStyle.None;
         var humanView = aiming && !flying && !controls.ControllingDrone ? controls.human.viewCamera : null;
-        bool canBreakWindow = humanView != null && humanView.isActiveAndEnabled &&
-            UnityEngine.Cursor.lockState == CursorLockMode.Locked && MultiplayerPrototype.Instance?.MenuOpen != true &&
-            BreakableWindow.TryGetTarget(new Ray(humanView.transform.position, humanView.transform.forward), out _);
-        windowPrompt.EnableInClassList("is-visible", canBreakWindow);
+        bool canInteract = humanView != null && humanView.isActiveAndEnabled &&
+            UnityEngine.Cursor.lockState == CursorLockMode.Locked && MultiplayerPrototype.Instance?.MenuOpen != true;
+        string prompt = null;
+        if (canInteract)
+        {
+            var view = new Ray(humanView.transform.position, humanView.transform.forward);
+            if (PlayerCarry.IsCarrying) prompt = PlayerCarry.Hint;
+            // A radio or TV is both a switchable device (E) and a liftable object (LMB): one line, no duplicate name.
+            else if (Interaction.TryFind(view, out var target))
+            {
+                string key = GameSettings.KeyName(GameAction.Interact);
+                string hold = Interaction.HoldPrompt(target);
+                prompt = (target.Prompt == "Заперто" ? "Заперто" : key + " — " + target.Prompt) +
+                    (hold != null ? "  ·  Удерж. " + key + " — " + hold : "") +
+                    (PlayerCarry.Hint != null ? "  ·  ЛКМ — Схватить" : "");
+            }
+            else if (PlayerCarry.Hint != null) prompt = PlayerCarry.Hint;
+            else if (controls.human.IsHidden) prompt = "В укрытии";
+            else if (controls.human.CanVault) prompt = GameSettings.KeyName(GameAction.Jump) + " — Перелезть";
+            else if (controls.human.IsProne) prompt = GameSettings.KeyName(GameAction.Prone) + " — Встать";
+        }
+        if (prompt != null && windowPromptText != null) windowPromptText.text = prompt;
+        windowPrompt.EnableInClassList("is-visible", prompt != null);
+        RefreshInventoryBar(humanView != null && !finished);
         result.style.display = finished ? DisplayStyle.Flex : DisplayStyle.None;
         hintWrap.style.display = finished ? DisplayStyle.None : DisplayStyle.Flex;
         roleIcon.style.display = !flying && !controls.IsSpectating ? DisplayStyle.Flex : DisplayStyle.None;
@@ -134,8 +297,8 @@ public class DroneHud : MonoBehaviour
         bool online = MultiplayerPrototype.OnlineMatch;
         stockLabel.style.display = online ? DisplayStyle.Flex : DisplayStyle.None;
         stockLabel.parent.EnableInClassList("match-stock", online);
-        if (online) stockLabel.text = "Дроны: " + MultiplayerPrototype.Instance.State.DroneStock;
-        if (Keyboard.current != null && Keyboard.current.hKey.wasPressedThisFrame) showHelp = !showHelp;
+        if (online) stockLabel.text = "Дроны: " + (MultiplayerPrototype.Instance.State.Settings.DroneStock == 0 ? "∞" : MultiplayerPrototype.Instance.State.DroneStock.ToString());
+        if (GameSettings.Pressed(GameAction.Help)) showHelp = !showHelp;
         help.style.display = showHelp && !finished ? DisplayStyle.Flex : DisplayStyle.None;
         if (Time.unscaledTime < nextRefresh) return;
         nextRefresh = Time.unscaledTime + 0.1f;
@@ -154,6 +317,12 @@ public class DroneHud : MonoBehaviour
             resultReason.text = round.DronesWon ? "Все люди найдены."
                 : "Время вышло. Выжило " + round.AliveHumans + " из " + round.TotalHumans + ".";
             if (MultiplayerPrototype.OnlineMatch) resultReason.text = MultiplayerPrototype.Instance.State.ResultReason;
+            var summary = MultiplayerPrototype.OnlineMatch ? MultiplayerPrototype.Instance.State.Summary : RoundStats.Last;
+            EnsureResultExtras();
+            resultStats.text = RoundStats.Format(summary);
+            resultStats.style.display = summary != null ? DisplayStyle.Flex : DisplayStyle.None;
+            lobbyButton.style.display = MultiplayerPrototype.OnlineMatch && MultiplayerPrototype.Instance.IsHost
+                ? DisplayStyle.Flex : DisplayStyle.None;
             restartButton.text = !round.CanRestart ? "Ждём хоста" : round.IsRestarting ? "Загрузка…" : "Ещё раунд";
             restartButton.SetEnabled(round.CanRestart && !round.IsRestarting);
             resultKey.text = round.CanRestart ? "или нажми R" : "Следующий раунд запускает хост";
@@ -162,8 +331,8 @@ public class DroneHud : MonoBehaviour
         }
         if (controls.IsSpectating)
             hint.text = controls.Spectator != null && controls.Spectator.IsFollowing
-                ? "Ты выбыл.  Tab — следующий игрок"
-                : "Ты выбыл.  WASD — свободная камера";
+                ? SpectatingLine(round)
+                : "Ты выбыл. Ожидай конца раунда.";
         else if (round != null && round.Phase == HideAndSeekRound.RoundPhase.Hiding)
             hint.text = "Найди укрытие.  H — управление";
         else
@@ -173,7 +342,7 @@ public class DroneHud : MonoBehaviour
         {
             if (controls.IsSpectating)
                 hint.text = onlineDrone ? "Дрон потерян. Следующий запуск — автоматически."
-                    : controls.Spectator.IsFollowing ? "Ты выбыл. Tab — следующий игрок" : "Ты выбыл. Ожидай конца раунда.";
+                    : controls.Spectator.IsFollowing ? SpectatingLine(round) : "Ты выбыл. Ожидай конца раунда.";
             else if (onlineDrone && round.Phase == HideAndSeekRound.RoundPhase.Hiding)
                 hint.text = "Люди прячутся. Ожидай начала поиска.";
             else if (onlineDrone) hint.text = "F — подрыв    H — управление    Esc — меню";
@@ -181,11 +350,31 @@ public class DroneHud : MonoBehaviour
                 ? "Найди укрытие. H — управление" : "H — управление    Esc — меню";
         }
         help.text = controls.IsSpectating
-            ? "Tab — следующий игрок\nСвободная камера: WASD, Space / Ctrl\nShift — быстрее"
+            ? "Tab — следующий игрок"
             : flying
                 ? "WASD — наклон\nМышь — поворот и обзор\nSpace / Ctrl — вверх и вниз\nC — камера вперёд\nV — режим полёта   B — моторы\nF — подрыв   Tab — человек"
-                : "WASD — движение\nМышь — обзор\nShift — бег\nCtrl — присесть\nSpace — прыжок\nE — разбить стекло\nSpace → Ctrl — пролезть в окно";
+                : "WASD — движение\nМышь — обзор\nShift — бег\nCtrl — присесть\nSpace — прыжок\nF — действие\nSpace → Ctrl — пролезть в окно";
         if (online) help.text = help.text.Replace("   Tab — человек", "").Replace("Свободная камера: WASD, Space / Ctrl\nShift — быстрее", "Esc — меню");
+        if (!controls.IsSpectating)
+        {
+            string key(GameAction action) => GameSettings.KeyName(action);
+            string movement = key(GameAction.MoveForward) + "/" + key(GameAction.MoveBack) + "/" +
+                key(GameAction.MoveLeft) + "/" + key(GameAction.MoveRight);
+            help.text = flying ? movement + " — наклон\nМышь — поворот и обзор\n" +
+                key(GameAction.DroneUp) + " / " + key(GameAction.DroneDown) + " — вверх / вниз\n" +
+                key(GameAction.DroneCenterCamera) + " — камера вперёд\n" + key(GameAction.DroneMode) + " — режим\n" +
+                key(GameAction.DroneMotors) + " — моторы   " + key(GameAction.DroneDetonate) + " — подрыв\n" +
+                key(GameAction.DroneLight) + " — фонарь" :
+                movement + " — движение\n" + key(GameAction.Sprint) + " — бег   " + key(GameAction.Crouch) + " — присесть\n" +
+                key(GameAction.Jump) + " — прыжок / перелезть\n" + key(GameAction.Prone) + " — лечь\n" +
+                key(GameAction.LeanLeft) + " / " + key(GameAction.LeanRight) + " — наклоны\n" +
+                key(GameAction.Interact) + " — действие (удерж. — замок)   " + key(GameAction.Push) + " — толкнуть\n" +
+                "ЛКМ — схватить / бросить   ПКМ — закрепить\n" +
+                "1/2/3 — слот   " + key(GameAction.DropItem) + " — бросить из слота   " + key(GameAction.Flashlight) + " — фонарик";
+            hint.text = flying ? key(GameAction.DroneDetonate) + " — подрыв    " + key(GameAction.Help) + " — управление    Esc — меню" :
+                (round != null && round.Phase == HideAndSeekRound.RoundPhase.Hiding ? "Найди укрытие.  " : "") +
+                key(GameAction.Help) + " — управление    Esc — меню";
+        }
         warning.text = "";
         if (flying)
         {

@@ -20,24 +20,18 @@ public class DroneExplosionEffect : MonoBehaviour
     public static void Play(Vector3 position, Material material, float radius, float duration, int particleCount, float strength = 1f)
     {
         radius = Mathf.Max(0.1f, radius); duration = Mathf.Max(0.3f, duration);
+        Concussion.FromBlast(position, radius);
         var effect = new GameObject("DroneExplosion");
         effect.transform.position = position;
         var animation = effect.AddComponent<DroneExplosionEffect>();
         strength = Mathf.Clamp(strength, 0.15f, 2f);
         animation.strength = strength;
         PreloadAudio();
+        DustCloud.Spawn(position, radius * 0.7f, Mathf.Clamp01(0.55f * strength));
         if (explosionSound != null)
         {
-            var audio = effect.AddComponent<AudioSource>();
-            audio.playOnAwake = false;
-            audio.clip = explosionSound;
-            audio.volume = Mathf.Clamp01(0.9f * strength);
-            audio.spatialBlend = 1f;
-            audio.rolloffMode = AudioRolloffMode.Linear;
-            audio.minDistance = 4f;
-            audio.maxDistance = Mathf.Max(75f, radius * 12f);
-            audio.dopplerLevel = 0;
-            audio.Play();
+            GameAudio.Play(explosionSound, position, Mathf.Clamp(0.65f * strength, 0f, 0.85f), 1f,
+                SoundCategory.Effects, 6f, Mathf.Max(160f, radius * 25f));
         }
         ExplosionCameraShake.Play(position, Mathf.Max(25f, radius * 5f), 0.55f, strength);
         animation.radius = radius; animation.duration = duration;

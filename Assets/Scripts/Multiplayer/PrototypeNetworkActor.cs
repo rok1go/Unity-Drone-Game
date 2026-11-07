@@ -49,6 +49,9 @@ public class PrototypeNetworkActor : MonoBehaviour
     {
         byte flags = 0;
         if (Human != null && Human.IsCrouching) flags |= NetPose.CrouchingFlag;
+        if (Human != null && Human.IsProne) flags |= NetPose.ProneFlag;
+        if (Human != null && Human.Lean < -0.3f) flags |= NetPose.LeanLeftFlag;
+        if (Human != null && Human.Lean > 0.3f) flags |= NetPose.LeanRightFlag;
         if (Drone != null && Drone.MotorsArmed) flags |= NetPose.MotorsFlag;
         if (Drone != null && Drone.flightMode == DroneController.FlightMode.Acro) flags |= NetPose.AcroFlag;
         return new NetPose
@@ -95,6 +98,8 @@ public class PrototypeNetworkActor : MonoBehaviour
     {
         bool wasDead = Dead;
         if (Human != null) Human.ApplyNetworkHealth(state.Health);
+        if (Human != null) Inventory.SetBeam(Human, state.Flashlight && !state.Dead);
+        if (Drone != null) Drone.SetSearchlight(state.Flashlight && !state.Dead);
         if (Drone == null) return;
         if (state.Dead && !wasDead) Drone.ApplyNetworkDestroyed(false);
         else if (!state.Dead && wasDead)
@@ -112,8 +117,13 @@ public class PrototypeNetworkActor : MonoBehaviour
         if (!buffer.Sample(buffer.Clock.RenderTime(NetSync.Now), out var pose, out var velocity)) return;
         transform.SetPositionAndRotation(pose.Position, pose.Rotation);
         if (View != null) View.transform.rotation = pose.View;
-        if (Human != null && Human.IsCrouching != ((pose.Flags & NetPose.CrouchingFlag) != 0))
-            Human.ApplyRemoteStance((pose.Flags & NetPose.CrouchingFlag) != 0);
+        if (Human != null)
+        {
+            var stance = (pose.Flags & NetPose.ProneFlag) != 0 ? HumanController.Stance.Prone
+                : (pose.Flags & NetPose.CrouchingFlag) != 0 ? HumanController.Stance.Crouching : HumanController.Stance.Standing;
+            float lean = (pose.Flags & NetPose.LeanLeftFlag) != 0 ? -1f : (pose.Flags & NetPose.LeanRightFlag) != 0 ? 1f : 0f;
+            Human.ApplyRemoteStance(stance, Mathf.MoveTowards(Human.Lean, lean, Time.deltaTime * 5f));
+        }
         if (Drone != null)
         {
             Drone.ApplyRemoteTelemetry(pose.Throttle / 255f, pose.FlightSeconds, (pose.Flags & NetPose.MotorsFlag) != 0,

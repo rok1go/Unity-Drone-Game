@@ -139,3 +139,6 @@ crashlytics-build.properties
 # Local audio processing and preview captures
 /.audio-work/
 /Captures/
+
+# Python tooling
+__pycache__/

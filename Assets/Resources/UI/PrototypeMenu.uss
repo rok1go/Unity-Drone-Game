@@ -33,3 +33,18 @@
 .unity-base-field__input { background-color: rgba(14, 27, 35, 0.8); border-width: 1px; border-color: rgba(191, 215, 226, 0.3); border-radius: 5px; color: rgb(245, 249, 250); padding: 5px 9px; }
 .unity-base-text-field__input:focus { border-color: rgb(205, 232, 225); }
 .code-input .unity-base-field__input { font-size: 24px; letter-spacing: 4px; }
+.display-confirm { position: absolute; left: 22%; right: 22%; top: 30%; padding: 30px; background-color: rgb(15, 30, 40); border-width: 2px; border-color: rgb(180, 220, 205); border-radius: 10px; }
+.unity-scroll-view { min-height: 80px; }
+.menu-button { flex-shrink: 0; }
+.unity-base-field { flex-direction: row; flex-shrink: 0; align-items: center; }
+.unity-base-field__label { width: 290px; flex-shrink: 0; white-space: normal; }
+.unity-base-field__input { flex-grow: 1; min-height: 28px; }
+.unity-scroll-view__content-container { flex-shrink: 0; padding-right: 12px; }
+.menu-wide > .unity-scroll-view { flex-shrink: 1; }
+.settings-column .unity-base-field { flex-direction: column; align-items: stretch; }
+.settings-column .unity-base-field__label { width: auto; min-width: 0; padding-top: 0; margin-bottom: 4px; }
+.settings-column .unity-base-field__input { width: auto; min-width: 0; }
+.lobby-columns { min-height: 0; flex-shrink: 1; }
+.players-column, .settings-column { min-width: 0; min-height: 0; }
+.settings-column > .unity-scroll-view { min-height: 60px; flex-shrink: 1; }
+.menu-title, .menu-subtitle, .code-row { flex-shrink: 0; }
