@@ -44,9 +44,18 @@ public class DestructionDebris : MonoBehaviour
         return false;
     }
 
+    // Client replay of a host cleanup: drop one block, and the body once it is empty.
+    internal void RemoveReplicatedBlock(DestructibleBlock block)
+    {
+        if (Release(block, out _)) { block.gameObject.SetActive(false); Destroy(block.gameObject); }
+        if (BlockCount > 0) return;
+        gameObject.SetActive(false);
+        Destroy(gameObject);
+    }
+
     private void OnCollisionEnter(Collision collision)
     {
-        if (impactPending || BlockCount < 2 || collision.contactCount == 0 ||
+        if (!DestructionSystem.Authority || impactPending || BlockCount < 2 || collision.contactCount == 0 ||
             Time.time - DetachedAt < 0.15f) return;
         var contact = collision.GetContact(0);
         float speed = Mathf.Abs(Vector3.Dot(collision.relativeVelocity, contact.normal));
@@ -69,6 +78,7 @@ public class DestructionDebris : MonoBehaviour
         for (int i = batches.Count - 1; i >= 0; i--)
         {
             if (Time.time < batches[i].expiresAt) continue;
+            DestructionSystem.RaiseBlocksRemoved(this, batches[i].blocks);
             foreach (var block in batches[i].blocks)
                 if (block != null) { block.gameObject.SetActive(false); Destroy(block.gameObject); }
             BlockCount -= batches[i].blocks.Count;

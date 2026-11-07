@@ -33,15 +33,21 @@ public class PrototypeMember
     public bool Ready;
 }
 
+// Rare, reliable pose (detonation point, blast point, server correction). Continuous poses use NetPose.
 [Serializable]
 public class PrototypePose
 {
     public ulong Id;
-    public Vector3 Position, Velocity;
-    public Quaternion Rotation, ViewRotation;
-    public float Health, Throttle, FlightSeconds;
-    public bool Dead, Crouching, Motors;
-    public int FlightMode;
+    public Vector3 Position;
+    public Quaternion Rotation;
+}
+
+[Serializable]
+public class PrototypeActorState
+{
+    public ulong Id;
+    public float Health;
+    public bool Dead;
 }
 
 [Serializable]
@@ -50,9 +56,9 @@ public class PrototypeState
     public string Code;
     public PrototypeLobbySettings Settings;
     public PrototypeMember[] Members = Array.Empty<PrototypeMember>();
-    public PrototypePose[] Actors = Array.Empty<PrototypePose>();
+    public PrototypeActorState[] Actors = Array.Empty<PrototypeActorState>();
     public PrototypePhase Phase;
-    public float Remaining;
+    public double PhaseEnds; // Netcode server time; the timer no longer needs a periodic resend.
     public int DroneStock, Generation;
     public bool DronesWon;
     public string ResultReason;
@@ -62,11 +68,10 @@ public class PrototypeState
 public class PrototypeMessage
 {
     public string Kind, Text, Name;
-    public int Team, Generation;
+    public int Team, Generation, Index;
     public bool Ready;
     public PrototypeLobbySettings Settings;
     public PrototypePose Pose;
     public PrototypeState State;
-    public string[] Blocks;
     public ulong ActorId;
 }

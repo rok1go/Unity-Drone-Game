@@ -14,6 +14,15 @@ public sealed class BreakableWindow : MonoBehaviour
     private static AudioClip breakSound;
     private static readonly HashSet<BreakableWindow> brokenWindows = new();
     internal static IEnumerable<BreakableWindow> BrokenWindows => brokenWindows;
+    // Window, source, speed, fromBlast. Raised for every successful break so multiplayer can replicate it.
+    public static event System.Action<BreakableWindow, Vector3, float, bool> Shattered;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
+    {
+        Shattered = null;
+        brokenWindows.Clear();
+    }
     private BoxCollider paneCollider;
     private MeshRenderer paneRenderer;
 
@@ -66,6 +75,7 @@ public sealed class BreakableWindow : MonoBehaviour
         brokenWindows.Add(this);
 
         GlassShardEffect.Emit(this, paneRenderer.sharedMaterial, away.normalized, speed, fromBlast);
+        Shattered?.Invoke(this, source, speed, fromBlast);
         return true;
     }
 

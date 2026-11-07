@@ -46,18 +46,24 @@ public class MultiplayerPrototype : MonoBehaviour
     private PrototypeLobbySettings settings = new PrototypeLobbySettings();
     private readonly Dictionary<ulong, PrototypeMember> members = new Dictionary<ulong, PrototypeMember>();
     private readonly Dictionary<ulong, PrototypeNetworkActor> actors = new Dictionary<ulong, PrototypeNetworkActor>();
-    private readonly Dictionary<string, DestructibleBlock> mapBlocks = new Dictionary<string, DestructibleBlock>();
-    private readonly Dictionary<ulong, float> lastPoseAt = new Dictionary<ulong, float>();
+    private readonly Dictionary<ulong, float> lastPoseArrival = new Dictionary<ulong, float>();
+    private readonly Dictionary<ulong, float> lastCorrection = new Dictionary<ulong, float>();
     private readonly Dictionary<ulong, float> respawns = new Dictionary<ulong, float>();
+    private readonly Dictionary<ulong, string> mapHashes = new Dictionary<ulong, string>();
     private readonly HashSet<ulong> sceneReady = new HashSet<ulong>();
-    private readonly HashSet<string> pendingBlocks = new HashSet<string>();
+    private readonly List<ulong> recipients = new List<ulong>();
+    private readonly List<PrototypeNetworkActor> snapshotActors = new List<PrototypeNetworkActor>();
+    private readonly List<byte[]> outgoing = new List<byte[]>();
+    private DestructionReplication replication;
+    private string localMapHash = "";
+    private float nextSnapshot, nextHeartbeat;
+    private int lastStateHash;
     private PrototypePhase phase = PrototypePhase.Lobby;
     private double phaseEnds;
     private int stock, generation;
     private bool handlersRegistered, leaving, sceneLoading, loadForMatch, waitingForScenes, localControlInitialized, localActive;
     private bool dronesWon;
     private string resultReason;
-    private float nextSend;
     private float loadingDeadline;
     private string networkStartupError;
 
@@ -80,8 +86,9 @@ public class MultiplayerPrototype : MonoBehaviour
         // The menu and scene gate must exist even if the optional network startup fails.
         menu = gameObject.AddComponent<PrototypeMenu>();
         menu.Initialize(this);
+        replication = new DestructionReplication();
+        replication.WindowRequested += RequestWindow;
         SceneManager.sceneLoaded += SceneLoaded;
-        DestructionSystem.BlockDetached += BlockDetached;
         try { InitializeNetworkManager(); }
         catch (Exception exception)
         {
@@ -96,6 +103,8 @@ public class MultiplayerPrototype : MonoBehaviour
         netObject.SetActive(false);
         DontDestroyOnLoad(netObject);
         var transport = netObject.AddComponent<UnityTransport>();
+        // A large building collapse is one reliable message; the 6 KB default is too small for it.
+        transport.MaxPayloadSize = 256 * 1024;
         network = netObject.AddComponent<NetworkManager>();
         // NetworkManager's Editor validation creates this implicitly; a runtime AddComponent does not.
         network.NetworkConfig = new NetworkConfig
@@ -125,6 +134,8 @@ public class MultiplayerPrototype : MonoBehaviour
     {
         sceneRig = FindObjectsByType<LocalControlSwitcher>().FirstOrDefault(r => r.gameObject.scene == scene);
         if (sceneRig == null) return;
+        DestructionSystem.Authority = true;
+        replication.End();
         scenePath = scene.path;
         TrainingGenerator = FindObjectsByType<ProceduralMapGenerator>().FirstOrDefault(g => g.gameObject.scene == scene);
         sceneRig.enabled = false;
@@ -132,7 +143,7 @@ public class MultiplayerPrototype : MonoBehaviour
         sceneRig.human.SetControlled(false); sceneRig.drone.SetControlled(false);
         humanTemplate.SetActive(false); droneTemplate.SetActive(false);
         localControls = null; localControlInitialized = false;
-        actors.Clear(); mapBlocks.Clear(); respawns.Clear(); lastPoseAt.Clear(); pendingBlocks.Clear();
+        actors.Clear(); respawns.Clear(); lastPoseArrival.Clear(); lastCorrection.Clear();
         if (menuCamera != null) Destroy(menuCamera.gameObject);
         var cameraObject = new GameObject("MenuCamera");
         menuCamera = cameraObject.AddComponent<Camera>();
@@ -149,8 +160,10 @@ public class MultiplayerPrototype : MonoBehaviour
         }
         if (waitingForScenes && network != null && network.IsListening)
         {
+            // Index the fresh map before any destruction op can reference it.
+            localMapHash = replication.BuildIndex();
             if (IsHost) { sceneReady.Add(LocalId); TryFinishLoading(); }
-            else SendServer(new PrototypeMessage { Kind = "scene-ready", Generation = generation });
+            else SendServer(new PrototypeMessage { Kind = "scene-ready", Generation = generation, Text = localMapHash });
         }
         else
         {
@@ -241,6 +254,8 @@ public class MultiplayerPrototype : MonoBehaviour
     {
         if (handlersRegistered || network.CustomMessagingManager == null) return;
         network.CustomMessagingManager.RegisterNamedMessageHandler(Channel, Receive);
+        network.CustomMessagingManager.RegisterNamedMessageHandler(NetSync.SnapshotChannel, ReceiveSnapshot);
+        network.CustomMessagingManager.RegisterNamedMessageHandler(DestructionReplication.OpsChannel, ReceiveDestruction);
         handlersRegistered = true;
     }
 
@@ -260,7 +275,8 @@ public class MultiplayerPrototype : MonoBehaviour
         if (leaving) return;
         if (IsHost)
         {
-            members.Remove(id); sceneReady.Remove(id); respawns.Remove(id);
+            members.Remove(id); sceneReady.Remove(id); respawns.Remove(id); mapHashes.Remove(id);
+            lastPoseArrival.Remove(id); lastCorrection.Remove(id);
             if (actors.TryGetValue(id, out var actor)) { if (actor != null) Destroy(actor.gameObject); actors.Remove(id); }
             if (waitingForScenes) TryFinishLoading();
             PublishState();
@@ -291,6 +307,119 @@ public class MultiplayerPrototype : MonoBehaviour
             if (id != LocalId) Send(id, message);
     }
 
+    private List<ulong> RemoteClients()
+    {
+        recipients.Clear();
+        foreach (ulong id in network.ConnectedClientsIds) if (id != LocalId) recipients.Add(id);
+        return recipients;
+    }
+
+    private void SendRaw(string channel, IReadOnlyList<ulong> targets, byte[] data, NetworkDelivery delivery)
+    {
+        if (targets.Count == 0 || network.CustomMessagingManager == null) return;
+        var writer = new FastBufferWriter(data.Length, Allocator.Temp);
+        try
+        {
+            writer.WriteBytesSafe(data);
+            network.CustomMessagingManager.SendNamedMessage(channel, targets, writer, delivery);
+        }
+        finally { writer.Dispose(); }
+    }
+
+    private void ReceiveSnapshot(ulong sender, FastBufferReader reader)
+    {
+        try
+        {
+            reader.ReadValueSafe(out byte kind);
+            reader.ReadValueSafe(out int messageGeneration);
+            if (!InMatch || messageGeneration != generation) return;
+            if (IsHost)
+            {
+                if (kind == NetSync.OwnerPose) ReceiveClientPose(sender, NetSync.ReadPose(reader));
+                return;
+            }
+            if (sender != NetworkManager.ServerClientId) return;
+            if (kind == NetSync.ActorSnapshot)
+            {
+                reader.ReadValueSafe(out byte count);
+                for (int i = 0; i < count; i++)
+                {
+                    reader.ReadValueSafe(out ulong id);
+                    var pose = NetSync.ReadPose(reader);
+                    if (id != LocalId && actors.TryGetValue(id, out var actor) && actor != null && !actor.Dead)
+                        actor.PushRemotePose(pose);
+                }
+            }
+            else if (kind == NetSync.DebrisSnapshot) replication.ReadDebrisSnapshot(reader);
+        }
+        catch (Exception exception) { Debug.LogWarning("Ignored invalid snapshot: " + exception.Message); }
+    }
+
+    private void ReceiveDestruction(ulong sender, FastBufferReader reader)
+    {
+        if (IsHost || sender != NetworkManager.ServerClientId) return;
+        try { replication.ApplyOps(reader, generation); }
+        catch (Exception exception) { Debug.LogWarning("Ignored invalid destruction message: " + exception.Message); }
+    }
+
+    private void SendSnapshots()
+    {
+        if (IsHost)
+        {
+            var targets = RemoteClients();
+            double now = NetSync.Now;
+            if (targets.Count == 0)
+            {
+                // Nobody to send to: still drain the queues so they cannot grow for the rest of the match.
+                outgoing.Clear();
+                replication.CollectDebrisSnapshots(generation, now, outgoing);
+                replication.CollectOpsMessages(generation, outgoing);
+                outgoing.Clear();
+                return;
+            }
+            snapshotActors.Clear();
+            foreach (var actor in actors.Values)
+                if (actor != null && !actor.Dead && (actor.IsLocal || actor.HasPose)) snapshotActors.Add(actor);
+            var writer = new FastBufferWriter(NetSync.MaxUnreliableBytes, Allocator.Temp);
+            try
+            {
+                writer.WriteValueSafe(NetSync.ActorSnapshot);
+                writer.WriteValueSafe(generation);
+                writer.WriteValueSafe((byte)snapshotActors.Count);
+                foreach (var actor in snapshotActors)
+                {
+                    writer.WriteValueSafe(actor.OwnerId);
+                    // Relay remote owners' poses unchanged: re-sampling would add a second delay.
+                    NetSync.WritePose(writer, actor.IsLocal ? actor.CaptureNet(now) : actor.LatestPose);
+                }
+                network.CustomMessagingManager.SendNamedMessage(NetSync.SnapshotChannel, targets, writer, NetworkDelivery.Unreliable);
+            }
+            finally { writer.Dispose(); }
+
+            outgoing.Clear();
+            replication.CollectDebrisSnapshots(generation, now, outgoing);
+            foreach (var packet in outgoing) SendRaw(NetSync.SnapshotChannel, targets, packet, NetworkDelivery.Unreliable);
+            outgoing.Clear();
+            replication.CollectOpsMessages(generation, outgoing);
+            foreach (var message in outgoing)
+                SendRaw(DestructionReplication.OpsChannel, targets, message, NetworkDelivery.ReliableFragmentedSequenced);
+            outgoing.Clear();
+            return;
+        }
+        if (!actors.TryGetValue(LocalId, out var local) || local == null || local.Dead) return;
+        if (local.Team == PrototypeTeam.Drones && phase != PrototypePhase.Hunting) return;
+        var own = new FastBufferWriter(64, Allocator.Temp);
+        try
+        {
+            own.WriteValueSafe(NetSync.OwnerPose);
+            own.WriteValueSafe(generation);
+            NetSync.WritePose(own, local.CaptureNet(NetSync.Now));
+            network.CustomMessagingManager.SendNamedMessage(NetSync.SnapshotChannel, NetworkManager.ServerClientId, own,
+                NetworkDelivery.Unreliable);
+        }
+        finally { own.Dispose(); }
+    }
+
     private void Receive(ulong sender, FastBufferReader reader)
     {
         try
@@ -309,15 +438,29 @@ public class MultiplayerPrototype : MonoBehaviour
     {
         if (!members.TryGetValue(sender, out var member)) return;
         if (message.Kind == "scene-ready" && message.Generation == generation && waitingForScenes)
-        { sceneReady.Add(sender); TryFinishLoading(); return; }
-        if (message.Kind == "pose" && InMatch && message.Generation == generation && message.Pose != null)
-        { ReceivePose(sender, message.Pose); return; }
+        { mapHashes[sender] = message.Text ?? ""; sceneReady.Add(sender); TryFinishLoading(); return; }
         if (message.Kind == "detonate" && InMatch && message.Generation == generation && phase == PrototypePhase.Hunting)
         {
             if (actors.TryGetValue(sender, out var actor) && actor.Team == PrototypeTeam.Drones && !actor.Dead)
             {
-                if (message.Pose != null) ReceivePose(sender, message.Pose);
+                if (message.Pose != null && NetSync.Finite(message.Pose.Position))
+                {
+                    // Detonate where the pilot saw the hit, within what the drone could have flown since.
+                    Vector3 reference = actor.HasPose ? actor.LatestPose.Position : actor.transform.position;
+                    Vector3 position = reference + Vector3.ClampMagnitude(message.Pose.Position - reference, 8f);
+                    actor.SnapTo(position, NetSync.UnpackRotation(NetSync.PackRotation(message.Pose.Rotation)));
+                }
                 actor.Drone.DetonateAuthoritatively();
+            }
+            return;
+        }
+        if (message.Kind == "window" && InMatch && message.Generation == generation && phase != PrototypePhase.Finished)
+        {
+            if (actors.TryGetValue(sender, out var actor) && actor.Team == PrototypeTeam.Humans && !actor.Dead &&
+                replication.TryGetWindowPosition(message.Index, out Vector3 window))
+            {
+                Vector3 eye = (actor.HasPose ? actor.LatestPose.Position : actor.transform.position) + Vector3.up * 1.5f;
+                if ((window - eye).sqrMagnitude < 5f * 5f) replication.HostShatterWindow(message.Index, eye);
             }
             return;
         }
@@ -343,8 +486,8 @@ public class MultiplayerPrototype : MonoBehaviour
                 var present = new HashSet<ulong>(State.Members.Select(m => m.Id));
                 foreach (ulong id in actors.Keys.Where(id => !present.Contains(id)).ToArray())
                 { if (actors[id] != null) Destroy(actors[id].gameObject); actors.Remove(id); }
-                foreach (var pose in State.Actors)
-                    if (actors.TryGetValue(pose.Id, out var actor)) actor.ReceiveServerPose(pose);
+                foreach (var actorState in State.Actors)
+                    if (actors.TryGetValue(actorState.Id, out var actor) && actor != null) actor.ReceiveServerState(actorState);
                 SynchronizeLocalRound();
             }
             else if (phase == PrototypePhase.Lobby) { waitingForScenes = false; menu.EnsureLobby(); }
@@ -356,17 +499,18 @@ public class MultiplayerPrototype : MonoBehaviour
         }
         else if (message.Kind == "blast" && actors.TryGetValue(message.ActorId, out var actor) && actor.Drone != null)
         {
-            if (message.Pose != null)
-            {
-                actor.transform.SetPositionAndRotation(message.Pose.Position, message.Pose.Rotation);
-                var body = actor.GetComponent<Rigidbody>();
-                body.position = message.Pose.Position; body.rotation = message.Pose.Rotation;
-            }
+            if (message.Pose != null) actor.SnapTo(message.Pose.Position, message.Pose.Rotation);
+            bool alreadyDestroyed = actor.Drone.IsDestroyed;
             actor.Drone.ApplyNetworkDestroyed(true);
+            // Walls and rubble arrive through the destruction stream; only locally simulated
+            // bodies (this player's own avatar) still need the blast push.
+            if (!alreadyDestroyed)
+                DestructionSystem.ApplyBlastForces(actor.transform.position, actor.Drone.explosionRadius,
+                    actor.Drone.explosionImpulse, actor.GetComponent<Rigidbody>());
         }
-        else if (message.Kind == "blocks" && message.Blocks != null)
-            foreach (string id in message.Blocks)
-                if (mapBlocks.TryGetValue(id, out var block) && block != null) block.HideReplicated();
+        else if (message.Kind == "correct" && message.Pose != null &&
+                 actors.TryGetValue(LocalId, out var self) && self != null)
+            self.ApplyCorrection(message.Pose.Position);
         else if (message.Kind == "close") LeaveWithReason(message.Text);
     }
 
@@ -420,6 +564,25 @@ public class MultiplayerPrototype : MonoBehaviour
     private void TryFinishLoading()
     {
         if (!IsHost || !waitingForScenes || sceneLoading || network.ConnectedClientsIds.Any(id => !sceneReady.Contains(id))) return;
+        if (loadForMatch)
+        {
+            // Destruction is replicated by map index, so every peer must have exactly the host's map.
+            bool dropped = false;
+            foreach (ulong id in network.ConnectedClientsIds.ToArray())
+            {
+                if (id == LocalId || (mapHashes.TryGetValue(id, out string hash) && hash == localMapHash)) continue;
+                network.DisconnectClient(id, "Карта отличается от карты хоста. Обнови игру.");
+                members.Remove(id); sceneReady.Remove(id); mapHashes.Remove(id);
+                dropped = true;
+            }
+            if (dropped && (!members.Values.Any(m => m.Team == PrototypeTeam.Drones) ||
+                            !members.Values.Any(m => m.Team == PrototypeTeam.Humans)))
+            {
+                BeginSceneReload(false);
+                menu.ShowError("Игрок с другой версией карты отключён — в одной из команд никого не осталось.");
+                return;
+            }
+        }
         waitingForScenes = false;
         if (!loadForMatch)
         {
@@ -456,8 +619,9 @@ public class MultiplayerPrototype : MonoBehaviour
                 sceneRig.drone = drone ? actor.Drone : droneTemplate.GetComponent<DroneController>();
             }
         }
-        foreach (var block in FindObjectsByType<DestructibleBlock>())
-            if (!string.IsNullOrEmpty(block.StableId)) mapBlocks[block.StableId] = block;
+        // The host simulates destruction; clients replay its results, so cover is identical everywhere.
+        DestructionSystem.Authority = IsHost;
+        replication.Begin(IsHost);
         State = state; sceneRig.enabled = true;
         SetMenuCamera(false); menu.Hide(); LockCursor(true);
     }
@@ -488,7 +652,9 @@ public class MultiplayerPrototype : MonoBehaviour
         int alive = actors.Values.Count(a => a.Team == PrototypeTeam.Humans && !a.Dead);
         var roundPhase = phase == PrototypePhase.Hiding ? HideAndSeekRound.RoundPhase.Hiding
             : phase == PrototypePhase.Finished ? HideAndSeekRound.RoundPhase.Finished : HideAndSeekRound.RoundPhase.Hunting;
-        localControls.Round.ApplyNetworkState(roundPhase, State.DronesWon, State.Remaining, total, alive);
+        float remaining = phase == PrototypePhase.Hiding || phase == PrototypePhase.Hunting
+            ? Mathf.Max(0f, (float)(State.PhaseEnds - network.ServerTime.Time)) : 0f;
+        localControls.Round.ApplyNetworkState(roundPhase, State.DronesWon, remaining, total, alive);
         RefreshLocalControl();
     }
 
@@ -497,41 +663,73 @@ public class MultiplayerPrototype : MonoBehaviour
         return new PrototypeState
         {
             Code = session != null ? session.Code : "", Settings = settings,
-            Members = members.Values.OrderBy(m => m.Id).ToArray(), Actors = actors.Values.Select(a => a.Capture()).ToArray(),
-            Phase = phase, Remaining = phase == PrototypePhase.Hiding || phase == PrototypePhase.Hunting
-                ? Mathf.Max(0f, (float)(phaseEnds - network.ServerTime.Time)) : 0f,
+            Members = members.Values.OrderBy(m => m.Id).ToArray(),
+            Actors = actors.Values.Where(a => a != null).Select(a => new PrototypeActorState
+            {
+                Id = a.OwnerId, Health = a.Human != null ? a.Human.Health : 0f, Dead = a.Dead
+            }).ToArray(),
+            Phase = phase, PhaseEnds = phaseEnds,
             DroneStock = stock, DronesWon = dronesWon, ResultReason = resultReason, Generation = generation
         };
     }
 
+    // Reliable state is event-driven: sent when something players can see changes, plus a slow heartbeat.
     private void PublishState()
     {
         if (!IsHost || !network.IsListening) return;
+        lastStateHash = ComputeStateHash();
+        nextHeartbeat = Time.unscaledTime + 1f;
         State = BuildState(); Broadcast(new PrototypeMessage { Kind = "state", State = State });
         if (phase == PrototypePhase.Lobby) menu.RefreshLobby();
         if (InMatch) SynchronizeLocalRound();
     }
 
-    private void ReceivePose(ulong sender, PrototypePose pose)
+    private int ComputeStateHash()
     {
-        if (!actors.TryGetValue(sender, out var actor) || actor.Dead || phase == PrototypePhase.Finished) return;
-        if (actor.Team == PrototypeTeam.Drones && phase != PrototypePhase.Hunting) return;
-        if (!Finite(pose.Position) || !Finite(pose.Velocity) || !Finite(pose.Rotation) || !Finite(pose.ViewRotation)) return;
-        float elapsed = lastPoseAt.TryGetValue(sender, out float last) ? Mathf.Clamp(Time.unscaledTime - last, 0.02f, 1f) : 0.1f;
-        lastPoseAt[sender] = Time.unscaledTime;
-        float limit = (actor.Team == PrototypeTeam.Humans ? 12f : 65f) * elapsed + 1f;
-        pose.Position = actor.transform.position + Vector3.ClampMagnitude(pose.Position - actor.transform.position, limit);
-        pose.Velocity = Vector3.ClampMagnitude(pose.Velocity, actor.Team == PrototypeTeam.Humans ? 20f : 65f);
-        pose.Id = sender;
-        pose.Rotation = pose.Rotation.normalized; pose.ViewRotation = pose.ViewRotation.normalized;
-        pose.Throttle = float.IsNaN(pose.Throttle) ? 0f : Mathf.Clamp01(pose.Throttle);
-        pose.FlightSeconds = float.IsNaN(pose.FlightSeconds) || float.IsInfinity(pose.FlightSeconds) ? 0f : Mathf.Max(0f, pose.FlightSeconds);
-        actor.ReceiveOwnerPose(pose);
+        unchecked
+        {
+            int hash = (int)phase * 397 ^ stock * 31 ^ (dronesWon ? 1 : 0) ^ phaseEnds.GetHashCode();
+            hash = hash * 31 + settings.HidingSeconds * 7 + settings.HuntingSeconds * 13 + settings.DroneStock;
+            foreach (var member in members.Values)
+                hash = hash * 31 + member.Id.GetHashCode() * 17 + (int)member.Team * 5 + (member.Ready ? 3 : 0) +
+                    (member.Name != null ? member.Name.GetHashCode() : 0);
+            foreach (var actor in actors.Values)
+                if (actor != null)
+                    hash = hash * 31 + (actor.Dead ? 1 : 0) +
+                        Mathf.RoundToInt(actor.Human != null ? actor.Human.Health * 10f : 0f) * 2;
+            return hash;
+        }
     }
 
-    private static bool Finite(Vector3 v) => !float.IsNaN(v.x + v.y + v.z) && !float.IsInfinity(v.x) && !float.IsInfinity(v.y) && !float.IsInfinity(v.z);
-    private static bool Finite(Quaternion q) => !float.IsNaN(q.x + q.y + q.z + q.w) &&
-        Quaternion.Dot(q, q) > 0.25f && Quaternion.Dot(q, q) < 4f;
+    private void ReceiveClientPose(ulong sender, NetPose pose)
+    {
+        if (!actors.TryGetValue(sender, out var actor) || actor == null || actor.Dead || phase == PrototypePhase.Finished) return;
+        if (actor.Team == PrototypeTeam.Drones && phase != PrototypePhase.Hunting) return;
+        if (!NetSync.Finite(pose.Position) || double.IsNaN(pose.Time) || double.IsInfinity(pose.Time)) return;
+        if (actor.HasPose && pose.Time <= actor.LatestPose.Time) return; // Reordered datagram.
+        // Speed limit over the shorter of sender time and real arrival time, so neither a forged
+        // timestamp nor a burst of delayed packets moves an avatar faster than it can travel.
+        float arrival = Time.unscaledTime;
+        float sinceArrival = lastPoseArrival.TryGetValue(sender, out float last) ? arrival - last + 0.1f : 0.1f;
+        lastPoseArrival[sender] = arrival;
+        float elapsed = actor.HasPose
+            ? Mathf.Clamp(Mathf.Min((float)(pose.Time - actor.LatestPose.Time), sinceArrival), 0.02f, 0.5f) : 0.1f;
+        Vector3 reference = actor.HasPose ? actor.LatestPose.Position : actor.transform.position;
+        float limit = (actor.Team == PrototypeTeam.Humans ? 12f : 65f) * elapsed + 1f;
+        Vector3 delta = pose.Position - reference;
+        if (delta.sqrMagnitude > limit * limit)
+        {
+            pose.Position = reference + delta.normalized * limit;
+            if (!lastCorrection.TryGetValue(sender, out float corrected) || arrival - corrected > 0.3f)
+            {
+                lastCorrection[sender] = arrival;
+                Send(sender, new PrototypeMessage
+                    { Kind = "correct", Pose = new PrototypePose { Id = sender, Position = pose.Position } });
+            }
+        }
+        if (float.IsNaN(pose.FlightSeconds) || float.IsInfinity(pose.FlightSeconds)) pose.FlightSeconds = 0f;
+        actor.PushRemotePose(pose);
+    }
 
     private void Update()
     {
@@ -553,20 +751,13 @@ public class MultiplayerPrototype : MonoBehaviour
             return;
         }
         if (IsHost && InMatch) AdvanceRound();
-        if (Time.unscaledTime < nextSend) return;
-        nextSend = Time.unscaledTime + 0.1f;
-        if (IsHost)
+        if (InMatch && Time.unscaledTime >= nextSnapshot)
         {
-            if (pendingBlocks.Count > 0)
-            {
-                string[] blocks = pendingBlocks.ToArray(); pendingBlocks.Clear();
-                for (int offset = 0; offset < blocks.Length; offset += 128)
-                    Broadcast(new PrototypeMessage { Kind = "blocks", Blocks = blocks.Skip(offset).Take(128).ToArray() });
-            }
-            PublishState();
+            // Fixed cadence that neither drifts on a late frame nor bursts after a hitch.
+            nextSnapshot = Mathf.Max(nextSnapshot + NetSync.SendInterval, Time.unscaledTime - NetSync.SendInterval);
+            SendSnapshots();
         }
-        else if (InMatch && actors.TryGetValue(LocalId, out var actor) && !actor.Dead)
-            SendServer(new PrototypeMessage { Kind = "pose", Pose = actor.Capture(), Generation = generation });
+        if (IsHost && (Time.unscaledTime >= nextHeartbeat || ComputeStateHash() != lastStateHash)) PublishState();
     }
 
     private void AdvanceRound()
@@ -590,12 +781,8 @@ public class MultiplayerPrototype : MonoBehaviour
             respawns.Remove(id);
             if (!actors.TryGetValue(id, out var actor)) continue;
             actor.Drone.SetFlightLocked(false); actor.Drone.ResetDrone();
-            if (!actor.IsLocal)
-            {
-                actor.Drone.IsNetworkReplica = true;
-                var body = actor.GetComponent<Rigidbody>();
-                body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative; body.isKinematic = true;
-            }
+            if (!actor.IsLocal) { actor.Drone.IsNetworkReplica = true; actor.MakeReplicaBody(); }
+            actor.ResetNetPose(); lastPoseArrival.Remove(id);
             RefreshLocalControl(true); PublishState();
         }
     }
@@ -632,7 +819,10 @@ public class MultiplayerPrototype : MonoBehaviour
         PublishState();
     }
 
-    private void BlockDetached(string id, Vector3 position) { if (InMatch && IsHost) pendingBlocks.Add(id); }
+    private void RequestWindow(int index)
+    {
+        if (InMatch && !IsHost) SendServer(new PrototypeMessage { Kind = "window", Index = index, Generation = generation });
+    }
 
     public bool CanObserve(HumanController human)
     {
@@ -724,6 +914,7 @@ public class MultiplayerPrototype : MonoBehaviour
         if (leaving) return;
         if (IsHost && network.IsListening) Broadcast(new PrototypeMessage { Kind = "close", Text = "Хост закрыл лобби." });
         InTraining = false; InMatch = false;
+        replication.End(); DestructionSystem.Authority = true;
         menu.ShowLoading("Выходим…");
         await CloseConnection();
         waitingForScenes = false; phase = PrototypePhase.Lobby;
@@ -742,7 +933,7 @@ public class MultiplayerPrototype : MonoBehaviour
         if (network != null && network.IsListening) network.Shutdown();
         float deadline = Time.realtimeSinceStartup + 5f;
         while (network != null && network.ShutdownInProgress && Time.realtimeSinceStartup < deadline) await Task.Yield();
-        handlersRegistered = false; members.Clear(); State = new PrototypeState();
+        handlersRegistered = false; members.Clear(); mapHashes.Clear(); State = new PrototypeState();
         waitingForScenes = false; Busy = false; leaving = false;
     }
 
@@ -763,7 +954,8 @@ public class MultiplayerPrototype : MonoBehaviour
     {
         leaving = true;
         SceneManager.sceneLoaded -= SceneLoaded;
-        DestructionSystem.BlockDetached -= BlockDetached;
+        if (replication != null) { replication.WindowRequested -= RequestWindow; replication.Dispose(); }
+        DestructionSystem.Authority = true;
         if (network != null)
         {
             network.OnServerStarted -= RegisterMessages; network.OnClientStarted -= RegisterMessages;

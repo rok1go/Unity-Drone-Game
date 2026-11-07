@@ -26,7 +26,10 @@ public static class DestructionSystem
         get { int count = 0; foreach (var item in debris) if (item != null && item.Body != null && !item.Body.isKinematic && !item.Body.IsSleeping()) count++; return count; }
     }
     public static int TotalDebrisCount => debris.Count;
-    public static event Action<string, Vector3> BlockDetached;
+    // Only the authority (offline, or the online host) simulates destruction. Online clients replay it.
+    public static bool Authority { get; set; } = true;
+    public static event Action<DestructionDebris, IReadOnlyList<DestructibleBlock>> ChunkCreated;
+    public static event Action<DestructionDebris, IReadOnlyList<DestructibleBlock>> BlocksRemoved;
     public static string[] LastDetachedIds { get; private set; } = Array.Empty<string>();
     internal static void Register(DestructionDebris item) => debris.Add(item);
     internal static void Unregister(DestructionDebris item) => debris.Remove(item);
@@ -35,7 +38,9 @@ public static class DestructionSystem
     {
         debris.Clear();
         LastDetachedIds = Array.Empty<string>();
-        BlockDetached = null;
+        ChunkCreated = null;
+        BlocksRemoved = null;
+        Authority = true;
         budgetStep = double.NaN;
     }
 
@@ -74,16 +79,46 @@ public static class DestructionSystem
         body.interpolation = RigidbodyInterpolation.Interpolate;
         body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
         var chunk = obj.AddComponent<DestructionDebris>();
-        foreach (var block in blocks)
-        {
-            Vector3 position = block.transform.position;
-            block.DetachInto(chunk.transform, damage.contactMaterial);
-            if (!inheritedExpiry.HasValue) BlockDetached?.Invoke(block.StableId, position);
-        }
+        foreach (var block in blocks) block.DetachInto(chunk.transform, damage.contactMaterial);
         chunk.Initialize(damage, blocks, inheritedExpiry);
         RefreshBody(chunk);
         chunk.Body.WakeUp();
+        ChunkCreated?.Invoke(chunk, blocks);
         return chunk;
+    }
+
+    // Client replica of a host rubble body: same blocks, kinematic, driven by host snapshots.
+    internal static DestructionDebris CreateReplicaChunk(List<DestructibleBlock> blocks, Vector3 root)
+    {
+        var obj = new GameObject("ReplicatedDebris");
+        obj.transform.SetParent(blocks[0].DebrisParent, true);
+        obj.transform.SetPositionAndRotation(root, Quaternion.identity);
+        var body = obj.AddComponent<Rigidbody>();
+        body.isKinematic = true;
+        body.interpolation = RigidbodyInterpolation.None;
+        body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
+        var chunk = obj.AddComponent<DestructionDebris>();
+        foreach (var block in blocks) block.DetachInto(chunk.transform, null);
+        chunk.Initialize(new ExplosionDamage { maxActiveDebris = 128, enableDebrisCleanup = false }, blocks);
+        return chunk;
+    }
+
+    internal static void RaiseBlocksRemoved(DestructionDebris chunk, List<DestructibleBlock> blocks)
+    {
+        if (blocks.Count > 0) BlocksRemoved?.Invoke(chunk, blocks);
+    }
+
+    // Pushes only locally simulated bodies. Online clients use it for their own player after a host blast.
+    public static void ApplyBlastForces(Vector3 position, float radius, float impulse, Rigidbody ignoreBody = null)
+    {
+        if (!Application.isPlaying || radius <= 0f) return;
+        var bodies = new HashSet<Rigidbody>();
+        foreach (var hit in Physics.OverlapSphere(position, radius, ~0, QueryTriggerInteraction.Ignore))
+        {
+            var target = hit.attachedRigidbody;
+            if (target == null || target == ignoreBody || target.isKinematic || !bodies.Add(target)) continue;
+            target.AddExplosionForce(impulse, position, radius, 0.6f, ForceMode.Impulse);
+        }
     }
 
     internal static void RefreshBody(DestructionDebris chunk)
@@ -111,7 +146,7 @@ public static class DestructionSystem
 
     internal static void FractureImpact(DestructionDebris source, Vector3 point, float speed)
     {
-        if (source.BlockCount < 2 || !HasCapacity(source.Damage.maxActiveDebris) || !HasStepCapacity()) return;
+        if (!Authority || source.BlockCount < 2 || !HasCapacity(source.Damage.maxActiveDebris) || !HasStepCapacity()) return;
         var blocks = source.GetComponentsInChildren<DestructibleBlock>();
         Array.Sort(blocks, (a, b) => (a.transform.position - point).sqrMagnitude.CompareTo(
             (b.transform.position - point).sqrMagnitude));
@@ -127,7 +162,7 @@ public static class DestructionSystem
 
     public static int ApplyExplosion(ExplosionDamage damage, Rigidbody ignoreBody = null)
     {
-        if (!Application.isPlaying || damage.radius <= 0) return 0;
+        if (!Application.isPlaying || damage.radius <= 0 || !Authority) return 0;
         using var sample = ExplosionMarker.Auto();
         var humanDamage = HumanExplosionDamage.Capture(damage, ignoreBody);
         Collider[] hits = Physics.OverlapSphere(damage.position, damage.radius, ~0, QueryTriggerInteraction.Ignore);

@@ -70,7 +70,9 @@ public class DroneController : MonoBehaviour
     public float DetonationRemaining => 0f;
     public Vector3 HomePosition => spawnPosition;
     public Vector3 StickInput => new Vector3(pitchInput, yawInput, rollInput);
-    public Vector3 Velocity => body != null && !body.isKinematic ? body.linearVelocity : Vector3.zero;
+    public Vector3 Velocity => body != null && !body.isKinematic ? body.linearVelocity : NetworkVelocity;
+    // Interpolated velocity of a network replica, so a spectator's OSD shows real speed.
+    public Vector3 NetworkVelocity { get; set; }
     public event Action Exploded;
     private Rigidbody body;
     private float pitchInput, rollInput, yawInput;

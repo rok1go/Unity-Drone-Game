@@ -24,6 +24,7 @@ public class BuildingStructure : MonoBehaviour
     public int CheckSupport(ExplosionDamage damage)
     {
         if (!Application.isPlaying) return 0;
+        if (!DestructionSystem.Authority) { dirty = false; return 0; } // Collapses arrive from the host.
         lastDamage = damage;
         if (!DestructionSystem.HasStepCapacity())
         {
